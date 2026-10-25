@@ -3,6 +3,22 @@
 给 AI agent 用的技能：把 Markdown 稿子转成 **MC百科（mcmod.cn）能直接粘贴的 HTML**，
 按官方编辑规范检查内容，并把长清单排成能读的表格结构。
 
+> 本仓库即技能目录：`SKILL.md` 在根目录，`scripts/` 在根目录下。
+
+## 从 GitHub 装（推荐）
+
+```bash
+git clone https://github.com/zgxhzhr/mcmod-page
+cd mcmod-page
+
+# Windows
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+# macOS / Linux
+bash install.sh
+```
+
+不想用 git 就下 [Releases](https://github.com/zgxhzhr/mcmod-page/releases) 里的 zip 解压，跑同样的安装脚本。
+
 ## 包里有什么
 
 ```
