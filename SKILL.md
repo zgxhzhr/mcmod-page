@@ -172,7 +172,8 @@ python scripts/rowspan.py "百科-女仆性格/女仆性格.mcmod.html"
 
 | 项 | 正确 | 错误 |
 |---|---|---|
-| 表头单元格 | `<th>表头</th>`（纯文本，不包 `<p>`、不加 `<strong>`） | `<td valign="top"><p><strong>表头</strong></p></td>` |
+| 表头单元格 | `<th>表头</th>`（纯文本，推荐；转换器给的就是这个） | `<td valign="top"><p><strong>表头</strong></p></td>` |
+| 另一种合法形态 | 编辑器自己插表时存成 `<thead><tr><th valign="top"><p><strong>表头</strong></p></th></tr></thead>`，同样被原样保存、正常渲染 | 同一页里别混用两种；`<th>` 内部包 `<p>`/`<strong>` 不算错 |
 | 表头行 | `<tr>` | `<tr class="firstRow">` |
 | 数据单元格 | `<td valign="top"><p>内容</p></td>`（内容仍要包 `<p>`） | `<td>内容</td>` |
 | 名称列强调 | `<td valign="top"><p><strong>名称</strong></p></td>` | 把名称做成 `<th>`（那是表头） |
