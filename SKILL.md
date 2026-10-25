@@ -1,6 +1,6 @@
 ---
 name: mcmod-page
-description: 编写与优化 MC百科（mcmod.cn）正文页面的完整方法：把 Markdown 稿转成百科能直接粘贴的 HTML（[hN=] 标题、<th> 表头的表格、可合并的 rowspan、list-paddingleft-2 列表、brush 代码块、[icon:...] 与 [ban:...] 标记），按官方编辑规范检查内容，并把长清单排成可读结构。随附两个零依赖脚本（md2mcmod.py 转换、rowspan.py 合并首列）与安装说明，可整套分发给他人使用。覆盖：百科正文支持与不支持的标签、表头必须用 th、编辑规范 35+5+10+1 条与可引用条号、"一坨段落 → 给轴分组 → 表格 → 合并单元格"的排版决策链、Windows MCP 桌面操控的安装与安全提醒、Mcmodder 油猴脚本、常见坏表修复、提交前数值校验、交付话术。MC百科、mcmod.cn、百科正文、百科格式、编辑规范、Markdown 转 HTML、表格排版、rowspan、合并单元格、th 表头、[h1=]、[ban:title_menu]、[icon:health]、资料页、教程页、审核退回、技能包。
+description: 编写与优化 MC百科（mcmod.cn）正文页面的完整方法：把 Markdown 稿转成百科能直接粘贴的 HTML（[hN=] 标题、<th> 表头的表格、可合并的 rowspan、list-paddingleft-2 列表、brush 代码块、[icon:...] 与 [ban:...] 标记），按官方编辑规范检查内容，并把长清单排成可读结构。随附两个零依赖脚本（md2mcmod.py 转换、rowspan.py 合并首列）与安装说明，可整套分发给他人使用。覆盖：百科正文支持与不支持的标签、表头必须用 th、编辑规范 35+5+10+1 条与可引用条号、"一坨段落 → 给轴分组 → 表格 → 合并单元格"的排版决策链、Windows MCP 桌面操控的安装与安全提醒、Mcmodder 油猴脚本、常见坏表修复、提交前数值校验、交付话术。MC百科、mcmod.cn、百科正文、百科格式、编辑规范、Markdown 转 HTML、表格排版、rowspan、合并单元格、th 表头、[h1=]、[ban:title_menu]、[mark:title_menu]、[icon:health]、资料页、教程页、审核退回、技能包。
 ---
 
 # MC百科页面编写（mcmod.cn）
@@ -143,10 +143,10 @@ python scripts/rowspan.py "百科-女仆性格/女仆性格.mcmod.html"
 | 段落 | `<p>…</p>` | |
 | 表格 | `<table><tbody><tr><th>表头</th>…</tr><tr><td valign="top"><p>…</p></td>…</tr></tbody></table>` | 表头**必须** `<th>`，见 §2.2 |
 | 合并单元格 | `<td rowspan="4" valign="top">…</td>` | UEditor 通常保留；粘完点一次「正文预览」确认 |
-| 列表 | `<ul class="list-paddingleft-2"><li><p>…</p></li></ul>` | **必须 `li > p`**；`li` 里直接放文字会被改坏 |
-| 代码块 | `<pre class="brush:java;toolbar:false">…</pre>` | 必须带语言（`java`/`text`/`shell`），否则提示"记得设置语言" |
+| 列表 | `<ul class="list-paddingleft-2"><li><p>…</p></li></ul>` | **必须 `li > p`**；`ol` 用同一个 class；编辑器存回来会变成 `class=" list-paddingleft-2"`（多一个前导空格），不影响渲染 |
+| 代码块 | `<pre class="brush:java;toolbar:false">…</pre>` | 要带语言（`brush:` 后面那段，如 `java` / `text` / `shell`）；不带语言编辑器会提示选择 |
 | 血量图标 | `[icon:health=20,点]` | 后面**不要**再写"点"，会变成"20 点点血量" |
-| 隐藏标题栏 | `[ban:title_menu]` | 裸文本，不能包进 `<p>` |
+| 标题 / 菜单栏指令 | `[ban:title_menu]` 或 `[mark:title_menu]` | 两种写法都见过（本模组页用的是 `mark`）；**包在 `<p>` 里也能正常生效**，不要改原稿写法 |
 | 图片 | `<img src="…" alt="…">` | 编辑器会自己补 `_src` |
 
 **不支持**（会导致红框或结构错乱）：`<code>` 行内代码、`<blockquote>`、`<hr>` / `---` / `* * *` / `===` 这类分割线（规范第 22 条明令禁止字符串或图片做的分割线）。
@@ -271,7 +271,7 @@ python scripts/md2mcmod.py 输入.md [-o 输出.mcmod.html] [--color-code] [--bo
 ```
 
 - `#`→`[hN=]`、表格（表头 `<th>`）、`ul/ol`→`list-paddingleft-2`、```` ```java ````→`<pre class="brush:java">`、`![alt](url)`→`<img>`、`[文字](url)`→`<a>`；
-- `* * *` / `---`（分割线）直接丢弃；`[ban:…]`/`[hide:…]` 之类指令输出为裸文本；
+- `* * *` / `---`（分割线）直接丢弃；`[ban:…]`/`[mark:…]`/`[hide:…]` 之类指令输出为裸文本（包 `<p>` 也能生效）；
 - 默认**不给行内代码上色**（合规优先）；`--color-code` 才用 `rgb(199,37,78)`；
 - `--bold-first-col` 把每张表首列加粗（名称列）。
 
@@ -333,7 +333,7 @@ $h = Get-Content "输出.mcmod.html" -Raw -Encoding UTF8
 ([regex]::Matches($h,'<tr')).Count                 # 行数 = 表头 + 数据行
 ([regex]::Matches($h,'rowspan="\d+"')).Count       # 合并格数
 ([regex]::Matches($h,'<blockquote|<code>')).Count  # 必须 0
-($h -split "`n")[0]                               # [ban:title_menu] 应为裸文本
+($h -split "`n")[0]                               # 首行应是 title_menu 指令；裸文本或 <p> 包裹都行
 ```
 
 另外：替换过的术语要扫残留；行数要与源表数据行数对得上。
