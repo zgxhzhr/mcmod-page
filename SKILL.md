@@ -410,6 +410,43 @@ python scripts/rowspan.py 页面.mcmod.html [-o 输出.html]
 **判断口诀**：读完那句，读者能不能说出"这些东西之间有什么差异"？说不出，就是清单填空。
 
 **适用范围**：不止装备栏。材料、生物、刻印、界面功能，任何"一组同类东西"的列举都适用。
+### 6.2 专有名词必须查 lang 文件，不能从代码标识符翻译
+
+写模组介绍时，物品名、机制名、刻印名一律以 `src/main/resources/assets/<modid>/lang/zh_cn.json` 为准。
+
+**反例（真实踩过，一次错了 8 个名字）**：
+
+| 代码标识符 | 直译（错） | lang 实际名（对） |
+|---|---|---|
+| `signet_of_reverie` | 追忆 | **空梦** |
+| `signet_of_bodhi` | 菩提 | **天慧** |
+| `signet_of_daybreak` | 天启 | **旭光** |
+| `signet_of_decimation` | 抽离 | **鏖灭** |
+| `signet_of_deliverance` | 救赎 | **救世** |
+| `fenghuang_down` | 凤凰下 | **羽渡尘** |
+| `abyss_flower` | 深渊之花 | **黑渊白花** |
+| `paintbrush` | 画笔 | **绘世之笔** |
+| `whisper_of_the_past` | 往昔低语 | **往世的飞花·爱之诗** |
+
+**为什么必须查**：代码里的注册名是开发者起的内部标识（`signet_of_bodhi`），玩家看到的是 lang 里的名字（**天慧**）。两者经常对不上——`bodhi` 字面是「菩提」，但崩坏3 设定里这个刻印叫「天慧」。**不查 lang 就写介绍，等于在编名字**（第 18 条：内容不实）。
+
+**连带效果也要用代码验证**：名字对了，效果未必对。同一个类里可能有多条效果，容易张冠李戴。例如 `BodhiSignetSystem` 里既有 `reduction`（减伤）又有 `HEAVENLY_EYE_VULNERABILITY`（易伤）和 `NBT_PASSIVE_DAMAGE_ENABLED`（开眼被动），lang 里的「天慧·开眼」证明**开眼才是主体**，减伤是另一条「真我无我」的效果。
+
+**核对脚本**：
+
+```powershell
+$zh = "src/main/resources/assets/<modid>/lang/zh_cn.json"
+$c  = Get-Content $zh -Raw -Encoding UTF8
+foreach ($key in @('item.yourmod.xxx', 'item.yourmod.yyy')) {
+    $m = [regex]::Match($c, '"' + [regex]::Escape($key) + '"\s*:\s*"([^"]*)"')
+    if ($m.Success) { Write-Output ("{0,-30} {1}" -f $key, $m.Groups[1].Value) }
+    else            { Write-Output ("{0,-30} （无此键）" -f $key) }
+}
+```
+
+**顺带能挖到的东西**：lang 里常藏着机制描述（`text.<modid>.literal.*`），比如「佩戴追忆之证时，对撕裂状态生物伤害提高 15%」这类具体数值——比读代码更快理解玩法。
+
+**交付前必做**：把正文里出现的每个专有名词与 lang 逐条对照，残留错名要清零。
 ## 7 常见坏表与坑
 
 从编辑器复制出来的表格常是残骸：**每个单元格被拆成 4 行**、续行省略首列、表中间插 `| --- |`。修复顺序：① 按列数重建规整表（逐行补全首列）→ ② 用 `rowspan.py` 合并 → ③ 只修粘贴损坏，不修作者文字。
