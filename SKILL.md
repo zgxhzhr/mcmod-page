@@ -447,6 +447,54 @@ foreach ($key in @('item.yourmod.xxx', 'item.yourmod.yyy')) {
 **顺带能挖到的东西**：lang 里常藏着机制描述（`text.<modid>.literal.*`），比如「佩戴追忆之证时，对撕裂状态生物伤害提高 15%」这类具体数值——比读代码更快理解玩法。
 
 **交付前必做**：把正文里出现的每个专有名词与 lang 逐条对照，残留错名要清零。
+### 6.3 先找模组自带手册（Patchouli），再读代码
+
+写机制介绍时，**第一件事不是翻 Java 源码**，而是找作者自己写的手册：
+
+```
+src/main/resources/assets/<modid>/patchouli_books/<book_name>/<lang>/entries/**/*.json
+```
+
+`pages[].text` 就是作者写给玩家的机制说明，通常包含**价格、消耗、冷却、重置返还比例、解锁条件**——这些在代码里要翻好几层才能拼出来。
+
+**真实案例（乐土终曲，一次全量审查挖出 9 处错误）**：
+
+| 手册文件 | 写的内容 | 推翻了我什么 |
+|---|---|---|
+| `signets/basics.json` | 「十二种基础刻印 + 真我」 | 我从代码数出「十三种平级」 |
+| `finality/cores.json` | 「核心基础售价 3000 银币，每种限购一次」 | 我完全没写价格 |
+| `realm/workshop.json` | 「升级消耗 1 材料 + 10 级经验，最多 3 次；重置返还 50%」 | 我只写了「可以融合升级」 |
+| `finality/trial_rules.json` | 「试炼需生存/冒险模式 + 佩戴终焉之茧；**乐土不自然刷怪**」 | 我写成「侵蚀镜像会在持续战斗中出现」 |
+| `getting_started/equipment.json` | 「饰品仅放背包不生效，需装进饰品栏」 | 我写成了不生效的条件 |
+
+**读取脚本**（把手册全文抽成纯文本）：
+
+```python
+import json, os
+base = r"...\patchouli_books\<book>\zh_cn\entries"
+for root, _, files in os.walk(base):
+    for fn in files:
+        if not fn.endswith(".json"):
+            continue
+        p = os.path.join(root, fn)
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        print("===", os.path.relpath(p, base))
+        print("  名称:", d.get("name"))
+        for pg in d.get("pages", []):
+            t = (pg.get("text") or "").replace("$(br2)", "\n").replace("$(br)", " ")
+            if t.strip():
+                print("  ", t.strip())
+```
+
+**优先级**：手册 > lang 的 tooltip > 代码。
+
+- 手册是**给玩家看的**，措辞与机制描述最贴近实际体验；
+- 代码只能证明「有这段逻辑」，证明不了「玩家怎么用」——这轮我靠代码猜出「刹那围绕暴击」，代码里根本没有暴击逻辑。
+
+**没有 Patchouli 时**：找 `assets/<modid>/guidebook`、`manual`、`docs/`，或仓库根的 `README` / `docs/`。
+
+**交付前**：正文里每个机制数字（价格 / 消耗 / 冷却 / 上限 / 次数）都要能指回手册或 tooltip 的原文。指不回去的，就是编的（第 18 条）。
 ## 7 常见坏表与坑
 
 从编辑器复制出来的表格常是残骸：**每个单元格被拆成 4 行**、续行省略首列、表中间插 `| --- |`。修复顺序：① 按列数重建规整表（逐行补全首列）→ ② 用 `rowspan.py` 合并 → ③ 只修粘贴损坏，不修作者文字。
