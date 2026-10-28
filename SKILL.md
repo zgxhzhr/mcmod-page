@@ -936,3 +936,37 @@ UserScript（含 `@match`、`@run-at document-idle`、IIFE 包裹），装进 Ta
 | 打包扩展 | **需要** | 仅当需要常驻、自动注入才用 |
 
 给用户写安装说明时，先给油猴路径；只有对方明确要求常驻扩展才提第三种。
+
+### 资料列表页（`/item/list/<classId>-<type>.html`）结构
+
+批量编辑的入口。实测结构（2026-10）：
+
+```
+table.item-list-table.item-list-table-<classId>-<type>
+├─ thead th[colspan=2]
+│   ├─ span.title > a[href="/class/<classId>.html"]
+│   ├─ div.item-list-switch-fold[data-type="1"]
+│   └─ ul.item-list-switch
+│       ├─ a.item-list-switch-lang       显示次要名称
+│       ├─ a.item-list-switch-skip       隐藏合并项
+│       └─ a.item-list-switch-quickedit  快速编辑（点后条目旁出现「编辑 / 加合成」）
+└─ tbody > tr
+    ├─ th.item-list-type-left            分类名（可能是链接）
+    └─ td.item-list-type-right ul li span a[href="/item/<资料id>.html"]
+         文本 = 中文名；data-en = 英文名 **或** 注册名（不统一，不能当主键）
+```
+
+- **资料 id 从 href 提取**：`/item/1028243.html` → `1028243`，这是编辑页 URL `/item/edit/<id>/` 需要的；
+- `data-en` 实测三种：注册名（`core_of_reason`）、英文名（`Abyss Flower`）、带扩展名的文件名（`xxx.png`）；
+- 条目总数可能大于页面顶部统计（隐藏合并项/「查看更多」）。
+
+**脚本已实现（v2.6，只读第一阶段）**：列表页右上角注入面板 →「读取列表」抓出 `分类/名称/英文/资料 id`，
+「切换快速编辑」后自动收集 `a[href*="/item/edit/"]`，「复制/下载 JSON」得到待编辑清单。
+
+**第二阶段（跨页批量编辑）设计**（未实现，需先单条验证）：
+```
+列表页：读取 rows → 载入待编辑 JSON → sessionStorage{queue,index,fields} → location.href='/item/edit/<id>/'
+编辑页：检测待办 → 复用 fillOne() 填字段 → 提交 → index++ → 回列表页
+```
+编辑页与新增页表单结构一致（同样 `[data-multi-id=...]` / `#icon-32x` / CodeMirror），
+但**编辑是覆盖式**：必须先单条验证「提交后不会产生重复条目、不会清空未填字段」。

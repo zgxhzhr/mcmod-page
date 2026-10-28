@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.5
-// @description  在 /item/add/<classId>/ 页面工具栏注入「批量新增」按钮，批量填充并提交资料
+// @version      2.6
+// @description  /item/add/* 批量新增；/item/list/* 读取列表与编辑链接（为批量编辑做准备）
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
+// @match        https://www.mcmod.cn/item/list/*
 // @match        https://www.mcmod.cn/item/edit/*
+// @match        https://www1.mcmod.cn/item/list/*
 // @match        https://www1.mcmod.cn/item/edit/*
 // @grant        none
 // @run-at       document-idle
@@ -22,6 +24,14 @@
   window.__mbBatchLoaded = true;
 
   const classId = (location.pathname.match(/\/item\/add\/(\d+)/) || [])[1] || 'unknown';
+
+  // ---------- 列表页模式（只读：读取分类/名称/资料 id/编辑链接） ----------
+  const listMatch = location.pathname.match(/\/item\/list\/(\d+)-(\d+)\.html/);
+  if (listMatch) {
+    initListPanel(listMatch[1], listMatch[2]);
+    return;
+  }
+
   const STATE_KEY = 'mcmod-batch-v2-' + classId;
 
   let items = [];
@@ -354,4 +364,114 @@
 
   if (state.done.length) log('本机已提交 ' + state.done.length + ' 条');
   updateStatus();
+
+  // ================= 列表页：读取与导出（第一阶段，只读） =================
+
+  function initListPanel(classId, typeId) {
+    if (document.getElementById('mb-list-panel')) return;
+
+    const style = document.createElement('style');
+    style.id = 'mb-list-style';
+    style.textContent = [
+      '#mb-list-panel{position:fixed;right:18px;top:96px;z-index:2147483600;width:430px;',
+      'background:#111827 !important;color:#e5e7eb !important;border:1px solid #374151 !important;',
+      'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:13.5px !important;overflow:hidden}',
+      '#mb-list-panel .mb-hd{display:flex;justify-content:space-between;align-items:center;',
+      'padding:9px 12px;background:#1f2937 !important;color:#f9fafb !important;font-weight:600;font-size:14px !important}',
+      '#mb-list-panel .mb-bd{padding:10px 12px;max-height:60vh;overflow:auto}',
+      '#mb-list-panel button{margin:2px 4px 2px 0;padding:5px 10px;border-radius:6px;border:1px solid #4b5563 !important;',
+      'background:#374151 !important;color:#f3f4f6 !important;font-size:13px !important;cursor:pointer}',
+      '#mb-list-panel button:hover{background:#4b5563 !important}',
+      '#mb-list-panel pre{margin:8px 0 0;padding:8px;background:#0b1220 !important;color:#cbd5e1 !important;',
+      'border-radius:6px;max-height:34vh;overflow:auto;font-size:12px !important;white-space:pre-wrap}',
+    ].join('');
+    document.head.appendChild(style);
+
+    const panel = document.createElement('div');
+    panel.id = 'mb-list-panel';
+    panel.innerHTML =
+      '<div class="mb-hd"><span>MC百科 列表工具 · v2.6</span><span style="cursor:pointer" id="mb-list-x">✕</span></div>' +
+      '<div class="mb-bd">' +
+      '<div id="mb-list-info">未读取</div>' +
+      '<div style="margin:8px 0">' +
+      '<button id="mb-list-read">读取列表</button>' +
+      '<button id="mb-list-copy">复制 JSON</button>' +
+      '<button id="mb-list-dl">下载 JSON</button>' +
+      '<button id="mb-list-quick">切换快速编辑</button>' +
+      '</div><pre id="mb-list-out"></pre></div>';
+    document.body.appendChild(panel);
+
+    const info = (s) => { const el = document.getElementById('mb-list-info'); if (el) el.textContent = s; };
+    const out = (s) => { const el = document.getElementById('mb-list-out'); if (el) el.textContent = s; };
+
+    function parseList() {
+      const rows = [];
+      document.querySelectorAll('table.item-list-table tbody tr').forEach((tr) => {
+        const th = tr.querySelector('th.item-list-type-left');
+        const cat = th ? th.innerText.trim() : '';
+        tr.querySelectorAll('td.item-list-type-right ul li span a[href*="/item/"]').forEach((a) => {
+          const m = (a.getAttribute('href') || '').match(/\/item\/(\d+)\.html/);
+          if (!m) return;
+          rows.push({
+            category: cat,
+            name: (a.innerText || '').trim(),
+            en: a.getAttribute('data-en') || '',
+            id: Number(m[1]),
+          });
+        });
+      });
+      // 合并快速编辑暴露的「编辑」链接
+      document.querySelectorAll('a[href*="/item/edit/"]').forEach((a) => {
+        const m = (a.getAttribute('href') || '').match(/\/item\/edit\/(\d+)/);
+        if (!m) return;
+        const id = Number(m[1]);
+        const hit = rows.find((r) => r.id === id);
+        if (hit) hit.edit = a.getAttribute('href');
+      });
+      return rows;
+    }
+
+    let rows = [];
+    document.getElementById('mb-list-read').addEventListener('click', () => {
+      rows = parseList();
+      const byCat = {};
+      rows.forEach((r) => { byCat[r.category] = (byCat[r.category] || 0) + 1; });
+      const hasEdit = rows.filter((r) => r.edit).length;
+      info('已读取 ' + rows.length + ' 条 / ' + Object.keys(byCat).length + ' 个分类' +
+           (hasEdit ? '（含 ' + hasEdit + ' 条编辑链接）' : '（无编辑链接，先点「切换快速编辑」）'));
+      out(JSON.stringify({ classId, typeId, total: rows.length, byCategory: byCat, rows }, null, 2).slice(0, 4000));
+      console.log('[列表工具]', rows);
+    });
+
+    document.getElementById('mb-list-copy').addEventListener('click', () => {
+      if (!rows.length) return info('先点「读取列表」');
+      const txt = JSON.stringify({ classId, typeId, rows }, null, 2);
+      navigator.clipboard.writeText(txt).then(() => info('已复制 JSON（' + rows.length + ' 条）'),
+                                             () => info('复制失败，请用「下载 JSON」'));
+    });
+
+    document.getElementById('mb-list-dl').addEventListener('click', () => {
+      if (!rows.length) return info('先点「读取列表」');
+      const blob = new Blob([JSON.stringify({ classId, typeId, rows }, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'mcmod-list-' + classId + '-' + typeId + '.json';
+      a.click();
+      info('已下载 JSON（' + rows.length + ' 条）');
+    });
+
+    document.getElementById('mb-list-quick').addEventListener('click', async () => {
+      const btn = document.querySelector('.item-list-switch-quickedit');
+      if (!btn) return info('没找到「快速编辑」开关');
+      btn.click();
+      await sleep(900);
+      rows = parseList();
+      const n = rows.filter((r) => r.edit).length;
+      info('已切换快速编辑，收集到 ' + n + ' 条编辑链接（共 ' + rows.length + ' 条）');
+    });
+
+    document.getElementById('mb-list-x').addEventListener('click', () => panel.remove());
+    console.log('[列表工具] 面板已注入', classId, typeId);
+  }
+
 })();
