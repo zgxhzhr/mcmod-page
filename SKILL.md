@@ -742,6 +742,41 @@ python scripts\gen-items.py --assets "<mod>/src/main/resources/assets/<ns>" --na
   复选框并点击（`mcmod-batch.user.js` 的 `fillOne`）。
 - 有图标时则相反：大小图标都要填，或小图标填完点「同步至大图标」。
 
+
+### 图标规范（审核实测要求）
+
+**1. 放大一律用「临近（保留硬边缘）」= NEAREST，不要平滑插值。**
+
+审核原话：「放大时选『临近（保留硬边缘）』就不会模糊了」。用 LANCZOS/BICUBIC 放大会产生大量过渡色，
+提交后会被判「图标模糊」退回。判定方法：看图片颜色数——18×18 原图放大到 128×128 后，
+NEAREST 的颜色数等于原图（个位数到几十），LANCZOS 会有上千种颜色。
+
+正确写法（Pillow）：
+
+```python
+def _fit(im, size):
+    '''放大用 NEAREST（保留硬边缘），缩小用 LANCZOS。'''
+    if im.width < size:
+        return im.resize((size, size), Image.NEAREST)
+    return im.resize((size, size), Image.LANCZOS)
+```
+
+注意：**缩小时用 LANCZOS 是对的**（缩小平滑避免锯齿），只有放大才必须 NEAREST。
+
+**2. 方块类资料必须交「立体图标」，单面贴图会被退回。**
+
+审核原话：「需要上传立体图标，提交的是单面纹理」。方块在游戏里显示的是等轴测立方体，
+只交 `textures/block/*.png` 的平面图不算。做法见 `render_block_iso.py`：取 top/side 贴图，
+按顶面 1.0 / 左面 0.8 / 右面 0.6 的明暗铺到等轴测三面上，512 超采样后缩到 128/32。
+
+**3. 大图标为空时必须勾「删除大图标」，否则判空值错误。**
+
+审核原话：「勾一下删除大小图标，里面是空的」。空不是「没有」，要显式删除。
+
+**4. BUFF/DEBUFF、实体的效果图标也要给，不能用原版 missing texture 蒙混。**
+
+原版 `missing_no.png` 只在**模组确实没有该贴图**时用，并在附言里说明原因。
+
 #### 缺图标时用原版 missing texture 占位
 
 **先区分「模组缺图 bug」和「真的没有图标」**：

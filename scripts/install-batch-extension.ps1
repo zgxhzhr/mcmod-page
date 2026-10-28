@@ -1,5 +1,5 @@
 ﻿# 把「MC百科 批量新增」装成浏览器扩展（Edge / Chrome 通用）
-# 装一次之后，打开 /item/add/ 页面就自动在工具栏出现「批量新增」按钮，不需要书签、不需要控制台。
+# 装一次之后：/item/add/ 出现「批量新增」面板；/item/list/ 出现「列表工具」面板（v2.6）。
 #
 # 用法（在本文件所在目录）：
 #   powershell -ExecutionPolicy Bypass -File install-batch-extension.ps1
@@ -28,13 +28,19 @@ $manifest = @'
 {
   "manifest_version": 3,
   "name": "MC百科 批量新增",
-  "version": "2.0",
+  "version": "2.25",
   "description": "在 MC百科 新增资料页注入「批量新增」按钮，批量填充并提交资料。",
   "content_scripts": [
     {
       "matches": [
         "https://www.mcmod.cn/item/add/*",
-        "https://www1.mcmod.cn/item/add/*"
+        "https://www1.mcmod.cn/item/add/*",
+        "https://www.mcmod.cn/item/list/*",
+        "https://www1.mcmod.cn/item/list/*",
+        "https://www.mcmod.cn/item/edit/*",
+        "https://www.mcmod.cn/verify*",
+        "https://www1.mcmod.cn/item/edit/*",
+        "https://www1.mcmod.cn/verify*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
@@ -53,7 +59,7 @@ Write-Host '   1) 浏览器打开  edge://extensions  （Chrome 用 chrome://ext
 Write-Host '   2) 右上角打开「开发人员模式」'
 Write-Host '   3) 点「加载解压缩的扩展」，选择上面那个目录'
 Write-Host ''
-Write-Host ' 装完后打开 https://www.mcmod.cn/item/add/<classId>/ ，' -ForegroundColor Green
+Write-Host ' 装完后打开 https://www.mcmod.cn/item/add/<classId>/ 或 /item/list/<classId>-1.html ，' -ForegroundColor Green
 Write-Host ' 工具栏「读取 (Ctrl+O)」后面会出现「批量新增」按钮。' -ForegroundColor Green
 Write-Host ''
 
