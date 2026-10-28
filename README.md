@@ -114,3 +114,17 @@ A：SKILL.md 里写了边界——**作者的措辞不要改**，只做标点/�
 
 **Q：能不能把 Markdown 直接交给浏览器里的油猴脚本转？**
 A：不建议。Mcmodder 的 Markdown→HTML 只告警不修正，会在 `<code>`/`<blockquote>` 上打红框，而那些内联样式会被一起保存进正文。用 `scripts/md2mcmod.py`。
+
+
+### 批量新增工具：三种安装方式（推荐第 1 种）
+
+`scripts/mcmod-batch.user.js` 本身是标准油猴脚本（带 `@match`、`@run-at document-idle`），
+**不需要开发者模式**。只有最初被打包成扩展时才必须开开发者模式——那是绕远路。
+
+| 方式 | 是否需要开发者模式 | 步骤 |
+|---|---|---|
+| **1. 油猴（推荐）** | 否 | 装 Tampermonkey → 「添加新脚本」→ 粘贴 `mcmod-batch.user.js` 全文 → 保存；打开 `/item/add/<classId>/` 即出现「批量新增」按钮 |
+| **2. 书签小工具** | 否 | 新建书签，地址粘 `scripts/mcmod-batch.bookmarklet.txt` 里的 `javascript:` 整行；在资料页点它即注入面板 |
+| 3. 打包扩展 | **是** | `scripts/install-batch-extension.ps1` 生成 `%LOCALAPPDATA%\McmodBatchExt`，再在 `edge://extensions` 开开发者模式加载 |
+
+三种方式面板完全一致；脚本更新后，油猴改脚本内容保存即可，书签需重新粘一次，扩展要重新运行安装脚本。

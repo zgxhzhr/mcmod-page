@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.4
+// @version      2.5
 // @description  在 /item/add/<classId>/ 页面工具栏注入「批量新增」按钮，批量填充并提交资料
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
+// @match        https://www.mcmod.cn/item/edit/*
+// @match        https://www1.mcmod.cn/item/edit/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -114,6 +116,20 @@
     if (it.damage) setVal(qm('damage'), it.damage);
     if (it.oredict) setVal(qm('oredict'), it.oredict);
     setVal(qm('remark'), it.remark || ('批量录入 ' + classId));
+
+    // 没有图标时：大图标字段必须清空并勾选「删除大图标/删除大小图标」，
+    // 否则审核会以「大图标是空的」退回（实测）
+    if (!it.icon32) {
+      const delBox = [...document.querySelectorAll('input[type=checkbox], label, span')].find((el) => {
+        const txt = (el.innerText || el.value || '').replace(/\s/g, '');
+        return /删除(大|大小)图标/.test(txt);
+      });
+      if (delBox) {
+        const box = delBox.tagName === 'INPUT' ? delBox
+          : (delBox.querySelector && delBox.querySelector('input[type=checkbox]'));
+        if (box && !box.checked) { box.click(); await sleep(200); }
+      }
+    }
 
     if (it.icon32) {
       setVal(q('#icon-32x-editor'), it.icon32);

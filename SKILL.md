@@ -675,6 +675,26 @@ python scripts\gen-items.py --assets "<mod>/src/main/resources/assets/<ns>" --na
 反例：把简介写成 5 张价格表 + 键位表 + 规则列表 = 手册。
 
 
+
+#### 注册名（regname）任何资料类型都不能空
+
+**踩过的坑**：BUFF/DEBUFF 那批 22 条全部被退回，理由就是「没有注册名」。
+当时把 `regname` 留空，以为「效果没有物品 id」——其实效果同样有注册表 id。
+
+| 资料类型 | 注册名填什么 | 例 |
+|---|---|---|
+| 物品 / 方块 | 物品注册表 id | `lastsongofelysian:core_of_fire` |
+| BUFF / DEBUFF | **效果注册表 id** `namespace:effect_id` | `lastsongofelysian:red_ink` |
+| 生物 / 实体 | 实体类型 id | `lastsongofelysian:elysian_hero_npc` |
+| 世界 / 维度 | 维度 id | `lastsongofelysian:elysian_realm` |
+| 绑定热键 | **留空**（实测审核不要求注册名） | — |
+| 游戏设定 | **留空**（无注册表，实测审核不要求） | — |
+
+**要求**：
+- 一律用 **ASCII**（别把中文写进 regname，如 `signet_空梦` 是错的，应 `signet_reverie`）；
+- 生成数据后跑一次自检：`[r for r in data if not r.get("regname")]` 必须为空；
+- 忘了填 → 整批退回重来，比补一次自检贵得多。
+
 #### 清点完整性：方块（BlockItem）极易被整批漏掉
 
 **踩过的坑**：图标生成脚本只扫 `assets/<ns>/textures/item/`，于是 98 条物品全齐，
@@ -708,6 +728,19 @@ python scripts\gen-items.py --assets "<mod>/src/main/resources/assets/<ns>" --na
 **方块资料的字段**和物品一致（`type` 仍是 `物品/方块`），但正文要写清：怎么获得（合成表）、
 方块属性（硬度/抗爆/挖掘等级/是否受重力/发光等级）、以及它的功能。
 
+
+
+#### 没有图标时：必须清空大图标并勾选「删除大图标」
+
+**踩过的坑**：生物/实体那批没带图标，被退回的理由是「勾一下删除大小图标，里面是空的」。
+即：大图标字段是空的、但页面上仍保留了该栏，审核判为空值错误——**空不是「没有」，要显式删除**。
+
+规则：
+- 任何资料只要**不上传图标**，就同时做两件事：清空「大图标」栏 + 勾选「删除大图标 / 删除大小图标」；
+- 只清空不勾选，仍会被退回；
+- 批量脚本 v2.5 起已自动处理：`icon32` 为空时会去找文字含「删除大图标/删除大小图标」的
+  复选框并点击（`mcmod-batch.user.js` 的 `fillOne`）。
+- 有图标时则相反：大小图标都要填，或小图标填完点「同步至大图标」。
 
 #### 缺图标时用原版 missing texture 占位
 
@@ -891,3 +924,15 @@ $h = Get-Content "输出.mcmod.html" -Raw -Encoding UTF8
 同成交 **HTML（主）+ Markdown 源稿**，并明确写：**「粘贴前请在编辑页顶部勾选『源代码编辑器』」**（Markdown 编辑器表达不了合并单元格与颜色）。不要宣称"已合规"，只报事实与待定项。
 
 ---
+
+**分发方式：优先油猴脚本，不要默认打包扩展。** `scripts/mcmod-batch.user.js` 本身就是标准
+UserScript（含 `@match`、`@run-at document-idle`、IIFE 包裹），装进 Tampermonkey 即可，
+**不需要开发者模式**；打包成扩展反而逼用户开 `edge://extensions` 的开发者模式，是绕远路。
+
+| 方式 | 开发者模式 | 适用 |
+|---|---|---|
+| 油猴脚本（推荐） | 不需要 | 日常使用，脚本更新只需改粘贴内容 |
+| 书签小工具 `javascript:` | 不需要 | 不想装扩展时，一次点按注入面板 |
+| 打包扩展 | **需要** | 仅当需要常驻、自动注入才用 |
+
+给用户写安装说明时，先给油猴路径；只有对方明确要求常驻扩展才提第三种。
