@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.25
+// @version      2.33
 // @description  /item/add/* 批量新增；/item/list/* 读取列表与编辑链接（为批量编辑做准备）
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -19,7 +19,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.25';
+  const MB_VERSION = '2.33';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -84,6 +84,21 @@
       apply(next);
       localStorage.setItem(STORE, next ? '1' : '0');
     });
+  }
+
+  /** 载入前先验一遍：不是 JSON 文件就直接给出人话提示，别抛 SyntaxError。 */
+  function checkJsonFileText(text, fileName) {
+    const head = (text || '').trimStart().slice(0, 1);
+    if (head !== '[' && head !== '{') {
+      const isMd = /\.(md|markdown|txt)$/i.test(fileName || '') || head === '#';
+      return {
+        ok: false,
+        msg: (isMd
+          ? '这不是 JSON：选到说明文档（' + fileName + '）了。请选以 .json 结尾的导入文件。'
+          : '这不是 JSON：文件开头是「' + (head || '空') + '」，应为 [ 或 {。'),
+      };
+    }
+    return { ok: true };
   }
 
   const PLAN_KEY = 'mb-edit-plan';
@@ -185,6 +200,19 @@
     return true;
   }
 
+  /** 有值就写，没值就清空。批量填表必须这样做，否则会带上一条的残留。 */
+  function clearOrSet(el, v) {
+    if (!el) return false;
+    if (v === undefined || v === null || v === '') {
+      const d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+      if (d && d.set) d.set.call(el, ''); else el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    return setVal(el, v);
+  }
+
   function findConfirm() {
     const els = [...document.querySelectorAll('button,a,div,span,p')].filter((el) => {
       const r = el.getBoundingClientRect();
@@ -244,26 +272,45 @@
     setCategory(it.category);
     await sleep(400);
 
+    // 注意：必须是「有值才写、没值就清空」。只写有值的字段会保留上一条的残留，
+    // 实测过一次「试听语音」的次要名称带出了上一条 BUFF 的英文名。
     setVal(qm('name'), it.name);
-    setVal(qm('ename'), it.ename);
-    setVal(qm('regname'), it.regname);
-    if (it.maxstack) setVal(qm('maxstack'), it.maxstack);
-    if (it.damage) setVal(qm('damage'), it.damage);
-    if (it.oredict) setVal(qm('oredict'), it.oredict);
+    clearOrSet(qm('ename'), it.ename);
+    clearOrSet(qm('regname'), it.regname);
+    clearOrSet(qm('maxstack'), it.maxstack);
+    clearOrSet(qm('damage'), it.damage);
+    clearOrSet(qm('oredict'), it.oredict);
     setVal(qm('remark'), it.remark || ('批量录入 ' + classId));
 
-    // 没有图标时：大图标字段必须清空并勾选「删除大图标/删除大小图标」，
-    // 否则审核会以「大图标是空的」退回（实测）
+    // 没有图标时：必须把「删除大图标」「删除小图标」都勾上（两个独立勾选框）。
+    // 页面上每个图标区有两个框：锁定X图标 / 删除X图标，所以要用 checkbox 自己的
+    // <label> 文字精确判断，不能用父级 innerText（会把「锁定」也误判成「删除」）。
     if (!it.icon32) {
-      const delBox = [...document.querySelectorAll('input[type=checkbox], label, span')].find((el) => {
-        const txt = (el.innerText || el.value || '').replace(/\s/g, '');
-        return /删除(大|大小)图标/.test(txt);
-      });
-      if (delBox) {
-        const box = delBox.tagName === 'INPUT' ? delBox
-          : (delBox.querySelector && delBox.querySelector('input[type=checkbox]'));
-        if (box && !box.checked) { box.click(); await sleep(200); }
+      const ownLabel = (el) => {
+        // 1) 原生 labels 关联（<label for> / 包裹式 label）
+        if (el.labels && el.labels.length) {
+          return [...el.labels].map((l) => l.textContent || '').join(' ');
+        }
+        // 2) 紧邻的下一个兄弟节点文字（<input><label>删除小图标</label>）
+        let n = el.nextSibling, out = '';
+        for (let i = 0; n && i < 3; i += 1, n = n.nextSibling) {
+          out += (n.textContent || '') + ' ';
+        }
+        return out;
+      };
+      const isDeleteIcon = (el) => {
+        const lbl = ownLabel(el).replace(/\s/g, '');
+        const attr = ((el.getAttribute('title') || '') + (el.name || '') + (el.id || '')).replace(/\s/g, '');
+        return /删除(大|小|大小)图标/.test(lbl) || /删除(大|小|大小)图标/.test(attr);
+      };
+      const boxes = [...document.querySelectorAll('input[type=checkbox]')].filter(isDeleteIcon);
+      let clicked = 0;
+      for (const box of boxes) {
+        if (!box.checked) { box.click(); clicked += 1; await sleep(200); }
       }
+      if (clicked) log('已勾选「删除图标」' + clicked + ' 个（大/小图标各一）');
+      else if (boxes.length) log('删除图标勾选框已是选中状态（共 ' + boxes.length + ' 个）');
+      else log('没找到「删除大图标/删除小图标」勾选框', '#fbbf24');
     }
 
     if (it.icon32) {
@@ -409,8 +456,10 @@
       const fr = new FileReader();
       fr.onload = () => {
         try {
+          const chk3 = checkJsonFileText(fr.result, f.name);
+          if (!chk3.ok) return log(chk3.msg, '#f87171');
           const arr = JSON.parse(fr.result);
-          if (!Array.isArray(arr)) throw new Error('顶层必须是数组');
+          if (!Array.isArray(arr)) throw new Error('顶层必须是数组（编辑计划是对象格式，别拿到这里用）');
           items = arr;
           state.index = 0;
           saveState();
@@ -569,15 +618,16 @@
     const info = (s) => { const el = document.getElementById('mb-list-info'); if (el) el.textContent = s; };
     const out = (s) => { const el = document.getElementById('mb-list-out'); if (el) el.textContent = s; };
 
-    function parseList() {
+    /** 从一个 document（主页或「查看更多」子页）里抽出条目。 */
+    function parseListFrom(doc) {
       const rows = [];
-      document.querySelectorAll('table.item-list-table tbody tr').forEach((tr) => {
+      doc.querySelectorAll('table.item-list-table tbody tr, tbody tr').forEach((tr) => {
         const th = tr.querySelector('th.item-list-type-left');
-        const cat = th ? th.innerText.trim() : '';
+        const cat = th ? (th.innerText || '').trim() : '';
         tr.querySelectorAll('td.item-list-type-right ul li span a[href*="/item/"]').forEach((a) => {
-          const m = (a.getAttribute('href') || '').match(/\/item\/(\d+)\.html/);
-          if (!m) return;
-          const id = Number(m[1]);
+          const mm = (a.getAttribute('href') || '').match(/\/item\/(\d+)\.html/);
+          if (!mm) return;
+          const id = Number(mm[1]);
           const name = (a.innerText || '').trim();
           const en = a.getAttribute('data-en') || '';
           const hit = rows.find((r) => r.id === id);
@@ -586,24 +636,64 @@
             if (!hit.en && en) hit.en = en;
             return;
           }
-          // 编辑页地址可直接由资料 id 推出，不必依赖「快速编辑」
           rows.push({ category: cat, name, en, id, edit: '/item/edit/' + id + '/' });
         });
       });
       // 合并快速编辑暴露的「编辑」链接
-      document.querySelectorAll('a[href*="/item/edit/"]').forEach((a) => {
-        const m = (a.getAttribute('href') || '').match(/\/item\/edit\/(\d+)/);
-        if (!m) return;
-        const id = Number(m[1]);
+      doc.querySelectorAll('a[href*="/item/edit/"]').forEach((a) => {
+        const mm = (a.getAttribute('href') || '').match(/\/item\/edit\/(\d+)/);
+        if (!mm) return;
+        const id = Number(mm[1]);
         const hit = rows.find((r) => r.id === id);
         if (hit) hit.edit = a.getAttribute('href');
       });
       return rows;
     }
 
+    /** 收集页面上所有「查看更多」子页链接。 */
+    function collectMoreLinks(doc) {
+      return [...doc.querySelectorAll('a.more[href*="/item/list/"], a[href*="/item/list/"][class*="more"]')]
+        .map((a) => a.getAttribute('href') || '')
+        .filter(Boolean)
+        .map((h) => (h.startsWith('http') ? h : location.origin + h));
+    }
+
+    /** 读取列表：主页面 + 全部「查看更多」子页（递归两层），按资料 id 去重。 */
+    async function parseListAll() {
+      const main = parseListFrom(document);
+      const seen = new Set(main.map((r) => r.id));
+      let queue = collectMoreLinks(document);
+      const visited = new Set();
+      let fetched = 0;
+
+      while (queue.length) {
+        const url = queue.shift();
+        if (visited.has(url) || visited.size > 40) continue;
+        visited.add(url);
+        try {
+          const res = await fetch(url, { credentials: 'include' });
+          const html = await res.text();
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          parseListFrom(doc).forEach((r) => {
+            if (seen.has(r.id)) return;
+            seen.add(r.id);
+            main.push(r);
+          });
+          // 子页里可能还有下一层「查看更多」
+          collectMoreLinks(doc).forEach((u) => { if (!visited.has(u)) queue.push(u); });
+          fetched += 1;
+          info('跟进「查看更多」子页 ' + fetched + ' 个，累计 ' + main.length + ' 条…');
+        } catch (e) {
+          console.warn('[批量工具] 子页抓取失败', url, e);
+        }
+      }
+      return main;
+    }
+
     let rows = [];
-    document.getElementById('mb-list-read').addEventListener('click', () => {
-      rows = parseList();
+    document.getElementById('mb-list-read').addEventListener('click', async () => {
+      info('正在读取列表（含「查看更多」子页）…');
+      rows = await parseListAll();
       const byCat = {};
       rows.forEach((r) => { byCat[r.category] = (byCat[r.category] || 0) + 1; });
       const hasEdit = rows.filter((r) => r.edit).length;
@@ -635,7 +725,7 @@
       if (!btn) return info('没找到「快速编辑」开关');
       btn.click();
       await sleep(900);
-      rows = parseList();
+      rows = await parseListAll();
       const n = rows.filter((r) => r.edit).length;
       info('已切换快速编辑，收集到 ' + n + ' 条编辑链接（共 ' + rows.length + ' 条）');
     });
@@ -648,13 +738,15 @@
       const f = e.target.files && e.target.files[0];
       if (!f) return;
       const rd = new FileReader();
-      rd.onload = () => {
+      rd.onload = async () => {
         try {
+        const chk = checkJsonFileText(rd.result, f.name);
+        if (!chk.ok) return info(chk.msg);
         let plan;
         try { plan = JSON.parse(rd.result); } catch (err) { return info('JSON 解析失败：' + err.message); }
         const items = plan.items || plan;
         if (!Array.isArray(items) || !items.length) return info('计划里没有 items');
-        if (!rows.length) rows = parseList();
+        if (!rows.length) rows = await parseListAll();
         const queue = [];
         const missed = [];
         items.forEach((it) => {
@@ -681,7 +773,7 @@
 
     // 抓取全部原文：逐条 fetch 详情页，取 .item-content 里的渲染后正文
     document.getElementById('mb-list-harvest').addEventListener('click', async () => {
-      if (!rows.length) rows = parseList();
+      if (!rows.length) rows = await parseListAll();
       if (!rows.length) return info('先点「读取列表」');
       const out = [];
       for (let i = 0; i < rows.length; i += 1) {
@@ -863,6 +955,20 @@
     if (item.remark !== undefined) setVal(qm('remark'), item.remark);
     if (item.maxstack !== undefined) setVal(qm('maxstack'), item.maxstack);
     if (item.damage !== undefined) setVal(qm('damage'), item.damage);
+
+    // 矿物词典 / tag：值是 #ns:path，支持逗号分隔多个
+    let oredictNote = '';
+    if (item.oredict) {
+      const el = qm('oredict');
+      if (el) {
+        setVal(el, item.oredict);
+        oredictNote = '矿物词典';
+        // 有的页面是「按回车生成标签」，补一次 Enter
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      } else {
+        oredictNote = '矿物词典字段未找到';
+      }
+    }
     if (item.icon32) {
       setVal(q('#icon-32x-editor'), item.icon32);
       setVal(q('#icon-32x'), item.icon32);
@@ -890,7 +996,11 @@
 
     const metaHits = fillEditMeta(item);
     await sleep(400);
-    return (editorPath || '未改正文') + (metaHits.length ? '，' + metaHits.join('、') : '');
+    const parts = [];
+    if (editorPath) parts.push(editorPath);
+    if (metaHits.length) parts.push(metaHits.join('、'));
+    if (oredictNote) parts.push(oredictNote);
+    return parts.length ? parts.join('，') : '未改任何字段';
   }
 
   function initEditPanel(itemId) {
@@ -1003,6 +1113,8 @@
       const rd = new FileReader();
       rd.onload = () => {
         try {
+          const chk4 = checkJsonFileText(rd.result, f.name);
+          if (!chk4.ok) return info(chk4.msg);
           const raw = JSON.parse(rd.result);
           const list = raw.items || raw;
           const arr = Array.isArray(list) ? list : [list];
@@ -1065,6 +1177,7 @@
         .filter((x) => btnWords.test(x.t));
       lines.push('按钮候选(' + btns.length + '):');
       btns.slice(0, 8).forEach((b) => lines.push('  「' + b.t + '」id=' + (b.id || '-') + ' cls=' + (b.c || '-')));
+      lines.push('矿物词典字段: ' + (qm('oredict') ? '存在' : '未找到'));
       ['改动附言', '改动说明'].forEach((kw) => {
         const r = findByLabel(kw);
         lines.push(kw + '定位: ' + (r ? ('命中 ' + (r.el.tagName + '#' + (r.el.id || '-') + '.' + ((r.el.className || '') + '').slice(0, 16)) + ' [' + r.how + ']') : '未命中'));
@@ -1089,99 +1202,94 @@
   // ================= 审核列表（/verify*）：读取与撤回 =================
 
   function parseVerifyRows() {
-    // 实测结构（2026-10）：
-    // <tr>
-    //   <td><a href="//center.mcmod.cn/…">昵称</a></td>
-    //   <td><i class="fa fa-edit"> / fa-plus  <a href="/class/31864.html">模组</a> 中的
-    //       <a href="/item/1025008.html">死之核心</a> 物品/方块。</td>
-    //   <td>创建时间</td>
-    //   <td><p class="text-muted">已撤回/已退回/已通过/审核中</p>…</td>
-    // </tr>
+    // 实测结构：<tr><td>昵称</td><td><i class="fa fa-edit|fa-plus"> … 操作文字</td>
+    //                    <td>创建时间</td><td>审核状态</td></tr>
+    // 注意：操作列不一定有资料链接（教程 / 模组整体的编辑就没有），
+    //       所以不能拿「有没有 /item/ 链接」当过滤条件。
     const scope = document.querySelector('.verify-list-list') || document.body;
-    const trs = [...scope.querySelectorAll('tr')]
-      .filter((tr) => tr.querySelector('a[href*="/item/"]') || tr.querySelector('a[href*="/item/add/"]'));
-
     const STATUS = /已撤回|已退回|审核中|已通过|待审核|已取消/;
     const KINDS = ['物品/方块', 'BUFF/DEBUFF', '生物/实体', '世界/维度', '绑定热键',
-                   '游戏设定', '多方块结构', '自然生成', '附魔/魔咒', '群系/群落'];
+                   '游戏设定', '多方块结构', '自然生成', '附魔/魔咒', '群系/群落', '教程'];
+
+    const trs = [...scope.querySelectorAll('tr')].filter((tr) => {
+      const tds = tr.querySelectorAll('td');
+      if (tds.length < 3) return false;
+      const txt = tr.innerText || '';
+      return STATUS.test(txt) || /再编辑|撤回/.test(txt) || tr.querySelector('a[href*="/item/"]');
+    });
 
     return trs.map((tr, index) => {
       const txt = (tr.innerText || '').replace(/\n+/g, ' | ');
       const tds = [...tr.querySelectorAll('td')];
 
-      // 动作链接（再编辑/新提交/撤回…）不是资料链接，要排除
-      const ACTION_WORDS = ['再编辑', '新提交', '撤回', '查看', '编辑', '提交'];
-      const anchors = [...tr.querySelectorAll('a[href]')].filter((a) => {
-        const txt = (a.innerText || '').trim();
-        return ACTION_WORDS.indexOf(txt) < 0;
-      });
-      // 名称优先用详情页链接（/item/<id>.html）的文字；没有再用 add/edit 链接
-      const detailA = anchors.find((a) => /\/item\/\d+\.html/.test(a.getAttribute('href') || ''));
-      const itemA = detailA || anchors.find((a) => /\/item\/(add|edit)\/\d+/.test(a.getAttribute('href') || ''));
-      const href = itemA ? (itemA.getAttribute('href') || '') : '';
-      let id = null, verifyId = null;
-      let mm = href.match(/\/item\/(add|edit)\/(\d+)(?:-(\d+))?/);
-      if (mm) {
-        id = Number(mm[2]);
-        verifyId = mm[3] ? Number(mm[3]) : null;
-      } else {
-        mm = href.match(/\/item\/(\d+)\.html/);
-        if (mm) id = Number(mm[1]);
-      }
-
-      // 类型：靠操作前的图标 class（fa-edit=编辑，fa-plus=新增）
-      let kind = '';
-      if (tr.querySelector('.fa-edit')) kind = '编辑';
-      else if (tr.querySelector('.fa-plus')) kind = '新增';
-      else if (/新增/.test(txt)) kind = '新增';
-      else if (/编辑/.test(txt)) kind = '编辑';
-
-      // 名称 = 资料链接自己的文字（优先详情页链接）
-      const nameA = detailA || itemA;
-      let name = nameA ? (nameA.innerText || '').trim() : '';
-      if (!name) {
-        // 新增类没有详情链接，名称只出现在「中添加 XXX 类型。」这句里
-        const km = txt.match(/中添加\s*([^。|]{1,40}?)\s*(物品\/方块|BUFF\/DEBUFF|生物\/实体|世界\/维度|绑定热键|游戏设定|多方块结构|自然生成|附魔\/魔咒|群系\/群落)/);
-        if (km) name = km[1].trim();
-      }
-      if (!name) {
-        const km2 = txt.match(/中的\s*([^。|]{1,40}?)\s*(物品\/方块|BUFF\/DEBUFF|生物\/实体|世界\/维度|绑定热键|游戏设定|多方块结构|自然生成|附魔\/魔咒|群系\/群落)/);
-        if (km2) name = km2[1].trim();
-      }
-
-      // 状态：优先最后一列，其次全行
-      const statusCell = tds.length ? tds[tds.length - 1].innerText : '';
-      const sMatch = (statusCell.match(STATUS) || txt.match(STATUS));
-      const status = sMatch ? sMatch[0] : '';
-
-      const kindLabel = KINDS.find((k) => txt.indexOf(k) >= 0) || '';
-      const timeCell = tds[2] ? (tds[2].innerText || '').trim() : '';
-
-      // 审核项 id：行内若有 /verify/<vid> 之类的链接或 data 属性就取
-      if (!verifyId) {
-        const vm = tr.innerHTML.match(/\/verify\/(\d+)/) || tr.innerHTML.match(/verify[_-]?id["'=:>\s]+(\d+)/i);
-        if (vm) verifyId = Number(vm[1]);
-      }
-
+      // 动作链接（不是资料链接）
       const pickAction = (word) => [...tr.querySelectorAll('a,button,span,div')]
         .find((x) => (x.innerText || '').trim() === word);
-      const retireEl = pickAction('撤回');
       const againEl = pickAction('再编辑') || pickAction('编辑');
-      // 「再编辑」通常是 <a>，其 href 就是官方目标页（新增走 /item/add/<classId>-<vid>/）
+      const retireEl = pickAction('撤回');
       const againAnchor = againEl
         ? (againEl.tagName === 'A' ? againEl : (againEl.closest && againEl.closest('a')))
         : null;
       const againHref = againAnchor ? (againAnchor.getAttribute('href') || '') : '';
-      if (againHref) {
-        const vm2 = againHref.match(/\/item\/(?:add|edit)\/\d+-(\d+)/);
-        if (vm2 && !verifyId) verifyId = Number(vm2[1]);
+
+      // 资料链接（可能没有）
+      const itemA = [...tr.querySelectorAll('a[href]')].find((a) => {
+        const h = a.getAttribute('href') || '';
+        const txtA = (a.innerText || '').trim();
+        if (['再编辑', '新提交', '撤回', '催审', '查看'].indexOf(txtA) >= 0) return false;
+        return /\/item\/\d+\.html/.test(h) || /\/item\/(add|edit)\/\d+/.test(h);
+      });
+
+      let id = null, verifyId = null, kind = '';
+      if (itemA) {
+        const href = itemA.getAttribute('href') || '';
+        let mm = href.match(/\/item\/(add|edit)\/(\d+)(?:-(\d+))?/);
+        if (mm) { id = Number(mm[2]); verifyId = mm[3] ? Number(mm[3]) : null; kind = mm[1] === 'add' ? '新增' : '编辑'; }
+        else {
+          mm = href.match(/\/item\/(\d+)\.html/);
+          if (mm) id = Number(mm[1]);
+        }
       }
+      if (!kind) {
+        const icon = tr.querySelector('[class*="fa-plus"], [class*="fa-edit"], [class*="fa-cube"], [class*="fa-pen"]');
+        const cls = icon ? (icon.className || '').toString() : '';
+        if (/fa-plus/.test(cls)) kind = '新增';
+        else if (/fa-edit|fa-pen/.test(cls)) kind = '编辑';
+        else kind = '操作';
+      }
+
+      // 审核项 id 从「再编辑」链接里取（新增/编辑两类 URL 都带）
+      const vm = againHref.match(/\/item\/(?:add|edit)\/\d+-(\d+)/);
+      if (vm) verifyId = Number(vm[1]);
+
+      // 名称：优先资料链接文字；否则从操作列文字里剥出目标
+      let name = itemA ? (itemA.innerText || '').trim() : '';
+      if (!name) {
+        const cell = tds[1] ? tds[1].innerText.replace(/[\u00a0\s]+/g, ' ').trim() : '';
+        // 操作列句式：「… 中添加 XXX 游戏设定。」「… 中的 XXX 物品/方块。」
+        const m2 = cell.match(/(?:中添加|中的)\s*(.+?)\s*(物品\/方块|BUFF\/DEBUFF|生物\/实体|世界\/维度|绑定热键|游戏设定|多方块结构|自然生成|附魔\/魔咒|群系\/群落|教程)/);
+        if (m2) name = m2[1].trim();
+        if (!name) {
+          let s = cell
+            .replace(/^编辑模组\s*/, '').replace(/^新增模组\s*/, '')
+            .replace(/^编辑\s*/, '').replace(/^新增\s*/, '');
+          s = s.replace(/^[^。]*?(?:中添加|中的)\s*/, '');
+          s = s.replace(new RegExp('(' + KINDS.join('|').replace(/\//g, '\\/') + ')。?$'), '').trim();
+          name = s.replace(/。$/, '').trim().slice(0, 40);
+        }
+      }
+
+      const kindLabel = KINDS.find((k) => txt.indexOf(k) >= 0) || '';
+      const statusCell = tds.length ? tds[tds.length - 1].innerText : '';
+      const sMatch = statusCell.match(STATUS) || txt.match(STATUS);
+      const status = sMatch ? sMatch[0] : '';
+      const timeCell = tds[2] ? (tds[2].innerText || '').trim() : '';
 
       return {
         index: index + 1, kind, id, verifyId, status, name, kindLabel,
         time: timeCell.replace(/\s+/g, ' ').slice(0, 30),
-        hasRetire: !!retireEl,
-        hasAgain: !!againEl, againHref,
+        hasRetire: !!retireEl, hasAgain: !!againEl, againHref,
+        isItem: !!id,
         _tr: tr, _again: againEl || null, _retire: retireEl || null,
         raw: txt.slice(0, 160),
       };
@@ -1245,7 +1353,8 @@
           '<input type="checkbox" class="mb-vsel" data-i="' + r.index + '" style="margin:0;vertical-align:middle">' +
           '<span style="color:' + color + ';min-width:44px">' + (r.status || '?') + '</span>' +
           '<span style="color:#6b7280;min-width:30px">' + r.kind + '</span>' +
-          '<span style="flex:1;color:#111827">' + (r.name || ('#' + r.id)) + '</span>' +
+          '<span style="flex:1;color:#111827">' + (r.name || (r.id ? ('#' + r.id) : '(未识别)')) +
+          (r.isItem ? '' : '<span style="color:#9ca3af;font-size:11px"> 非资料</span>') + '</span>' +
           '<button data-act="again" data-i="' + r.index + '" style="padding:3px 8px !important;font-size:12px !important">再编辑</button>' +
           (r.hasRetire ? '<button data-act="retire" data-i="' + r.index + '" style="padding:3px 8px !important;font-size:12px !important;background:#b91c1c !important;border-color:#991b1b !important">撤回</button>' : '') +
           '</div>';
@@ -1255,9 +1364,11 @@
           const r = rows.find((x) => String(x.index) === btn.getAttribute('data-i'));
           if (!r) return;
           if (btn.getAttribute('data-act') === 'again') {
-            // 优先用页面自带的「再编辑」入口，退化为直接打开编辑页
+            // 优先点页面自带的「再编辑」；没有就按链接跳；再退化为 /item/edit/<id>/
             if (r._again) { r._again.click(); info('已点击「再编辑」：' + (r.name || r.id)); }
+            else if (r.againHref) { location.href = r.againHref; }
             else if (r.id) { location.href = '/item/edit/' + r.id + '/'; }
+            else info('这条没有可用的再编辑入口');
           } else {
             if (!confirm('确认撤回「' + (r.name || r.id) + '」？撤回后需重新提交。')) return;
             if (r._retire) { r._retire.click(); info('已点击「撤回」：' + (r.name || r.id)); }
@@ -1309,6 +1420,8 @@
       const rd = new FileReader();
       rd.onload = () => {
         try {
+          const chk2 = checkJsonFileText(rd.result, f.name);
+          if (!chk2.ok) return info(chk2.msg);
           const raw = JSON.parse(rd.result);
           const planItems = raw.items || raw;
           if (!Array.isArray(planItems) || !planItems.length) return info('计划里没有 items');
@@ -1326,6 +1439,7 @@
               return rn === nm || rn.indexOf(nm) >= 0 || nm.indexOf(rn) >= 0;
             });
             if (!row) { missed.push(it.name || it.id); return; }
+            if (!row.id && !row.againHref) { missed.push((it.name || it.id) + '（无入口）'); return; }
             queue.push(Object.assign({}, it, {
               id: row.id,
               kind: row.kind,
@@ -1360,11 +1474,12 @@
     });
 
     document.getElementById('mb-verify-batchagain').addEventListener('click', () => {
-      const sel = selectedRows().filter((r) => r.id);
+      const sel = selectedRows().filter((r) => r.id || r.againHref);
       if (!sel.length) return info('没有选中条目');
       info('打开 ' + sel.length + ' 个编辑页…');
       sel.slice(0, 12).forEach((r, i) => {
-        setTimeout(() => window.open('/item/edit/' + r.id + '/', '_blank'), i * 400);
+        const u = r.againHref || ('/item/edit/' + r.id + '/');
+        setTimeout(() => window.open(u, '_blank'), i * 400);
       });
       if (sel.length > 12) info('只打开了前 12 个（共 ' + sel.length + ' 条）');
     });
