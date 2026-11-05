@@ -1264,6 +1264,38 @@ table.item-list-table.item-list-table-<classId>-<type>
 编辑页与新增页表单结构一致（同样 `[data-multi-id=...]` / `#icon-32x` / CodeMirror），
 但**编辑是覆盖式**：必须先单条验证「提交后不会产生重复条目、不会清空未填字段」。
 
+
+#### Mcmodder 升级后「脚本没反应」：先查 @require 的 CDN，不是篡改猴版本
+
+**实测（2026-11，Mcmodder 2.4.0 → 2.4.1）**
+
+| 版本 | supabase-js 的 `@require` 地址 | 实测耗时 |
+|---|---|---|
+| 2.4.0 | `https://cdn.jsdmirror.com/npm/...` | **0.9 s** |
+| 2.4.1 | `https://fastly.jsdelivr.net/npm/...` | **3.0 s**（且时通时不通） |
+
+篡改猴要等**所有 `@require` 加载完成**才执行脚本，所以跨境 CDN 一慢/一失败，
+表现就是：页面样式不变、编辑器功能不工作，看起来像「脚本坏了」或「篡改猴版本太低」。
+实际与篡改猴版本无关，升到 Beta 也不解决。
+
+**处理**：用 `scripts/patch-mcmodder.py` 把官方脚本的 CDN 换成镜像后再安装。
+
+```
+python scripts/patch-mcmodder.py mcmodder-2.4.1.user.js
+# 输出 mcmodder-2.4.1-mirror.user.js，装这个
+```
+
+脚本会做三件事：`fastly.jsdelivr.net` / `cdn.jsdelivr.net` → `cdn.jsdmirror.com`；
+`raw.githubusercontent.com` → `raw.gitmirror.com`；并补上对应的 `@connect` 放行。
+
+**注意**：官方每次更新都要重新打补丁（新版本会覆盖）。
+
+**排查顺序**（下次再遇到「脚本没反应」）：
+1. 篡改猴图标角标有没有数字；
+2. 该脚本的 `@require` 地址在浏览器里能不能 1 秒内打开；
+3. 扩展是否被停用、是否装了两套篡改猴；
+4. 最后才怀疑篡改猴版本。
+
 #### Mcmodder 固定用 2.4.0（2.4.1 的源代码编辑器在本机不可用）
 
 **现象**：升级到 Mcmodder 2.4.1 后，编辑页的「源代码编辑器」（HTML/CodeMirror 面板）能显示、
