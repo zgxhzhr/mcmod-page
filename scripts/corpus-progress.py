@@ -54,7 +54,8 @@ PAGE = """<!DOCTYPE html>
  <div class="sub" id="sub">正在读取…</div>
  <div class="grid">
    <div class="card"><div class="k">已处理</div><div class="v" id="done">—</div></div>
-   <div class="card"><div class="k">有正文</div><div class="v ok" id="ok">—</div></div>
+   <div class="card"><div class="k">长文 ≥100字</div><div class="v ok" id="ok">—</div></div>
+   <div class="card"><div class="k">短页 20-99字</div><div class="v" id="short">—</div></div>
    <div class="card"><div class="k">空/失败</div><div class="v err" id="bad">—</div></div>
    <div class="card"><div class="k">速度</div><div class="v" id="rate">—</div></div>
  </div>
@@ -71,6 +72,7 @@ async function tick(){
       d.done+' / '+d.target+' 条　剩余约 '+(d.eta_min>=0?d.eta_min+' 分钟':'—');
     document.getElementById('done').textContent=d.done;
     document.getElementById('ok').textContent=d.ok;
+    document.getElementById('short').textContent=d.short;
     document.getElementById('bad').textContent=d.bad;
     document.getElementById('rate').textContent=d.rate.toFixed(2)+' 条/秒';
     document.getElementById('foot').textContent='最后更新 '+d.now+'　数据目录 '+d.data;
@@ -93,22 +95,41 @@ def stats(data: Path, target: int) -> dict:
         return out
     try:
         row = con.execute(
-            "SELECT COUNT(*), SUM(CASE WHEN chars>=100 THEN 1 ELSE 0 END), "
-            "SUM(CASE WHEN chars<100 OR chars IS NULL THEN 1 ELSE 0 END) FROM classes").fetchone()
+            "SELECT COUNT(*), "
+            "SUM(CASE WHEN chars>=100 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN chars>=20 AND chars<100 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN chars<20 OR chars IS NULL THEN 1 ELSE 0 END) FROM classes").fetchone()
         done = row[0] or 0
         out["done"] = done
-        out["ok"] = row[1] or 0
-        out["bad"] = row[2] or 0
+        out["ok"] = row[1] or 0        # 长文（≥100 字，语料主力）
+        out["short"] = row[2] or 0     # 短页（20-99 字）
+        out["bad"] = row[3] or 0       # 空/失败
 
-        # 最近 30 条的抓取速率
+        # 实时速率：只看最近 180 秒内写入的条数（避免历史数据把速率拉低）
         times = [r[0] for r in con.execute(
-            "SELECT fetched_at FROM classes ORDER BY rowid DESC LIMIT 30")]
-        if len(times) >= 5 and times[0] and times[-1]:
-            t1 = datetime.strptime(times[0], "%Y-%m-%dT%H:%M:%S")
-            t0 = datetime.strptime(times[-1], "%Y-%m-%dT%H:%M:%S")
-            span = (t1 - t0).total_seconds()
-            if span > 0:
-                out["rate"] = (len(times) - 1) / span
+            "SELECT fetched_at FROM classes ORDER BY rowid DESC LIMIT 300")]
+        if times and times[0]:
+            now_ts = datetime.strptime(times[0], "%Y-%m-%dT%H:%M:%S")
+            window = 180.0
+            recent = 0
+            for ts in times:
+                if not ts:
+                    continue
+                try:
+                    dt = (now_ts - datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")).total_seconds()
+                except Exception:
+                    continue
+                if dt <= window:
+                    recent += 1
+                else:
+                    break
+            if recent >= 2:
+                out["rate"] = recent / window
+            elif len(times) >= 5 and times[-1]:
+                t0 = datetime.strptime(times[-1], "%Y-%m-%dT%H:%M:%S")
+                span = (now_ts - t0).total_seconds()
+                if span > 0:
+                    out["rate"] = (len(times) - 1) / span
     except Exception:
         pass
     finally:
@@ -168,7 +189,7 @@ def main() -> int:
         eta = f"剩 {s['eta_min']} 分" if s["eta_min"] >= 0 else "—"
         line1 = (f"  [{bar(s['pct'])}] {s['pct']:5.1f}%  "
                  f"{s['done']}/{s['target']}  {eta}")
-        line2 = (f"  有正文 {s['ok']}   空/失败 {s['bad']}   "
+        line2 = (f"  长文 {s['ok']}   短页 {s.get('short', 0)}   空/失败 {s['bad']}   "
                  f"{s['rate']:.2f} 条/秒   {s['now']}")
         return line1 + "\n" + line2
 

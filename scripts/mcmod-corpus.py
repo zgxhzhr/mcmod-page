@@ -122,7 +122,11 @@ class SocksHTTPSConnection(http.client.HTTPSConnection):
 
 
 class Banned(Exception):
-    """站点防火墙封禁页。"""
+    """站点防火墙永久封禁页（换 IP 才解）。"""
+
+
+class VerifyRequired(Exception):
+    """站点安全验证页（过验证 / 更新 Cookie 即可）。"""
 
 
 class Session:
@@ -133,13 +137,18 @@ class Session:
     - 代理：SOCKS5 长连接可复用隧道，避免每次重新握手
     """
 
-    def __init__(self, host: str = "www.mcmod.cn", timeout: int = 40, proxy: str = ""):
+    def __init__(self, host: str = "www.mcmod.cn", timeout: int = 40, proxy: str = "",
+                 cookie: str = ""):
         self.host = host
         self.timeout = timeout
         self.proxy = proxy
+        self.cookie = cookie
         self.conn = None
 
     def _new(self):
+        # 硬保护：抓 mcmod 时禁止无代理直连，避免暴露本机真实 IP
+        if not self.proxy and self.host.endswith("mcmod.cn"):
+            raise RuntimeError("禁止直连抓取 mcmod.cn（会暴露本机真实 IP），请配置 --proxy")
         if self.proxy:
             ph, pp = self.proxy.split(":")
             return SocksHTTPSConnection(self.host, 443, (ph, int(pp)), self.timeout)
@@ -149,12 +158,15 @@ class Session:
         if self.conn is None:
             self.conn = self._new()
         try:
-            self.conn.request("GET", path, headers={
+            headers = {
                 "User-Agent": UA,
                 "Accept": "text/html,application/xhtml+xml",
                 "Accept-Language": "zh-CN,zh;q=0.9",
                 "Connection": "keep-alive",
-            })
+            }
+            if self.cookie:
+                headers["Cookie"] = self.cookie
+            self.conn.request("GET", path, headers=headers)
             r = self.conn.getresponse()
             body = r.read()
             status = r.status
@@ -165,6 +177,8 @@ class Session:
             text = body.decode(enc, errors="replace")
             if "已被系统封禁" in text:
                 raise Banned("站点防火墙封禁（换 IP 或等解封）")
+            if status == 403 or "安全验证" in text[:3000]:
+                raise VerifyRequired("站点要求安全验证（更新 Cookie 或过验证）")
             return status, text
         except Banned:
             raise
@@ -315,6 +329,47 @@ def cmd_crawl(args) -> int:
         print("没有待抓的 id")
         return 0
 
+    # 载入 Cookie（过验证后导出，用于绕过 WAF 安全验证）
+    cookie_str = ""
+    if args.cookie_file:
+        cf = Path(args.cookie_file)
+        if cf.exists():
+            cookie_str = cf.read_text(encoding="utf-8").strip()
+            print(f"已载入 Cookie：{len(cookie_str)} 字符（{cf.name}）")
+        else:
+            print(f"!! Cookie 文件不存在：{cf}")
+    args.cookie_str = cookie_str
+
+    # ---- 启动自检：必须走代理，且代理链路与站点都可用 ----
+    if not args.proxy:
+        print("!! 拒绝启动：未指定 --proxy。抓取 mcmod 必须走代理，否则会暴露本机真实 IP。")
+        print("   如确需直连（不推荐），请显式加 --allow-direct。")
+        if not getattr(args, "allow_direct", False):
+            return 2
+    else:
+        print("启动自检：")
+        try:
+            chk = Session(host="myip.ipip.net", proxy=args.proxy, cookie=args.cookie_str, timeout=20)
+            _, ip_text = chk.get("/")
+            chk.close()
+            ip_line = " ".join(ip_text.split())[:90]
+            print(f"  代理出口 IP：{ip_line}")
+        except Exception as e:
+            print(f"  !! 代理不可用：{e}")
+            print("  请检查爱加速是否运行、端口是否正确（默认 127.0.0.1:1080）。")
+            return 3
+        try:
+            chk2 = Session(proxy=args.proxy, cookie=args.cookie_str, timeout=25)
+            code, body = chk2.get("/class/1.html")
+            chk2.close()
+            if code != 200:
+                print(f"  !! 站点自检异常：HTTP {code}")
+                return 4
+            print(f"  站点自检通过：HTTP {code}，{len(body)//1024} KB")
+        except Exception as e:
+            print(f"  !! 站点自检失败：{type(e).__name__} {str(e)[:80]}")
+            return 4
+
     workers = max(1, args.workers)
     print(f"待抓 {len(todo)} 个（库中已有 {len(done)}，sitemap 共 {len(all_ids)}）")
     print(f"并发 {workers} 线程，每线程间隔 {args.delay}s，全局上限 {args.max_qps} 条/秒，"
@@ -346,7 +401,7 @@ def cmd_crawl(args) -> int:
             time.sleep(delay)
 
     def worker(chunk):
-        sess = Session(proxy=args.proxy)
+        sess = Session(proxy=args.proxy, cookie=args.cookie_str)
         con = db(data)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA busy_timeout=8000")
@@ -365,6 +420,14 @@ def cmd_crawl(args) -> int:
                     with lock:
                         counters["ban"] = counters.get("ban", 0) + 1
                     break
+                except VerifyRequired as e:
+                    if not stop.is_set():
+                        print(f"\n!! {e}，立即停止所有线程", flush=True)
+                        print("   处理：跑 verify-and-get-cookie.py 重新过验证，再用 --cookie-file 重试", flush=True)
+                    stop.set()
+                    with lock:
+                        counters["ban"] = counters.get("ban", 0) + 1
+                    break
                 except Exception as e:
                     code, page = 0, ""
                     err = str(e)[:120]
@@ -378,10 +441,13 @@ def cmd_crawl(args) -> int:
             now = time.strftime("%Y-%m-%dT%H:%M:%S")
             if code == 200 and page:
                 d = parse_class(page)
-                if d["chars"] < 100:
+                if d["chars"] < 20:
                     # 第一次空页记 empty（下次重抓），第二次仍空记 empty2（放弃）
                     prev = con.execute("SELECT error FROM classes WHERE id=?", (cid,)).fetchone()
                     err = "empty2" if prev and prev[0] == "empty" else "empty"
+                elif d["chars"] < 100:
+                    # 20~99 字：页面拿到了，但内容太短，对语料无价值，标记为 short 保留
+                    err = "short"
                     row = [cid, d["name"], d["short_name"], d["en"], d["status"], d["source"],
                            d["env"], d["views"], d["idx"], d["chars"], d["n_paras"],
                            d["n_tables"], d["n_lists"], d["n_imgs"], d["n_headings"],
@@ -512,6 +578,8 @@ def main() -> int:
     p.add_argument("--delay", type=float, default=1.2)
     p.add_argument("--max-id", type=int, default=0, help="只抓 id 小于等于该值的（时间老的）")
     p.add_argument("--proxy", default="", help="SOCKS5 代理 host:port（如 127.0.0.1:1080），留空为直连")
+    p.add_argument("--cookie-file", default="", help="Cookie 文件（如 E:\\Mod\\百科-语料\\cookie-header.txt）")
+    p.add_argument("--allow-direct", action="store_true", help="允许直连（危险：暴露本机真实 IP）")
     p.add_argument("--workers", type=int, default=2, help="并发线程数（默认 2，保守）")
     p.add_argument("--max-qps", type=float, default=1.0, help="全局每秒最多请求数（默认 1.0，保守）")
     p.add_argument("--only-id", type=int, nargs="*")

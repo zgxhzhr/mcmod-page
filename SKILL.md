@@ -1350,6 +1350,40 @@ table.item-list-table.item-list-table-<classId>-<type>
 
 
 
+
+### 抓取必须全程走代理（硬约束）
+
+**用户要求**：抓取 mcmod.cn 时不得暴露本机真实 IP（真实 IP 曾被封，已由用户申诉解除，
+不能再犯）。因此这条是硬约束，不是“建议”。
+
+**代码级保护**（`scripts/mcmod-corpus.py` 已实现）：
+
+1. `Session._new()` 里——host 以 `mcmod.cn` 结尾且 `proxy` 为空 → 直接抛
+   `RuntimeError("禁止直连抓取 mcmod.cn")`，不存在“静默回落直连”；
+2. `crawl` 启动自检，未带 `--proxy` 直接拒绝启动（要直连必须显式
+   `--allow-direct`，属于危险开关）；
+3. 启动时先经代理请求 `myip.ipip.net` 打印**代理出口 IP**，再请求站点一次，
+   两者都通过才开始抓。
+
+**代理协议注意**：爱加速等国内加速器只开 **SOCKS5** 端口（如 `127.0.0.1:1080`）。
+
+- Windows 系统代理设置只支持 HTTP 代理 → 对 SOCKS5 无效；
+- Python `urllib` 也只认 HTTP 代理 → 表现为「代理开着但爬虫仍走真实 IP」；
+- 正确做法：对 socket 手写 SOCKS5 握手（`05 01 00` → `05 00` → CONNECT 域名 → 包 TLS），
+  见 `SocksHTTPSConnection`。
+
+**自检命令**（任何时候怀疑没走代理）：
+
+```
+curl --socks5-hostname 127.0.0.1:1080 https://myip.ipip.net   # 应为代理节点 IP
+```
+
+代码里则用 `Session(host="myip.ipip.net", proxy=...)` 打印出口 IP。
+
+**速率与验证**：走代理后单页 1–7 秒（代理延迟高），要跑满目标速率需 3 线程以上并发；
+若站点返回 403 / 「安全验证」，先跑 `verify-and-get-cookie.py` 用浏览器过一次验证，
+导出 Cookie 后用 `--cookie-file` 继续（Cookie 头部关键项是 `MCMOD_SEED`）。
+
 ### 抓取限速铁律（实测被防火墙封禁过）
 
 **事件**：2026-11-08 用 4–5 线程、3.5 QPS 抓 `/class/<id>.html`，约 10 分钟后
