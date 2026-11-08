@@ -30,10 +30,14 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import random
 import re
+import socket
+import ssl
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -89,6 +93,97 @@ def db(data_dir: Path) -> sqlite3.Connection:
     con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
     con.commit()
     return con
+
+
+class SocksHTTPSConnection(http.client.HTTPSConnection):
+    """走 SOCKS5 的 HTTPS 长连接（手动握手，不依赖 PySocks）。
+
+    背景：国内加速器/代理多是 SOCKS5 端口（如 1080），而 Windows 系统代理
+    和 Python urllib 只认 HTTP 代理，所以“开了代理却仍然走真实 IP”是常态。
+    这里直接对 socket 做 SOCKS5 CONNECT，再在其上包 TLS。
+    """
+
+    def __init__(self, host, port=443, proxy=("127.0.0.1", 1080), timeout=40):
+        super().__init__(host, port, timeout=timeout)
+        self.proxy = proxy
+
+    def connect(self):
+        s = socket.create_connection(self.proxy, self.timeout)
+        s.settimeout(self.timeout)
+        s.sendall(b"\x05\x01\x00")
+        if s.recv(2) != b"\x05\x00":
+            raise OSError("SOCKS5 握手失败")
+        hb = self.host.encode()
+        s.sendall(b"\x05\x01\x00\x03" + bytes([len(hb)]) + hb + self.port.to_bytes(2, "big"))
+        resp = s.recv(10)
+        if len(resp) < 2 or resp[1] != 0:
+            raise OSError(f"SOCKS5 连接失败 {resp.hex()}")
+        self.sock = ssl.create_default_context().wrap_socket(s, server_hostname=self.host)
+
+
+class Banned(Exception):
+    """站点防火墙封禁页。"""
+
+
+class Session:
+    """单线程复用的 HTTPS 长连接（可走 SOCKS5）。
+
+    实测（2026-11）：
+    - 直连：urllib 每页新建 TLS 约 0.51 s，长连接约 0.12 s（差 4 倍）
+    - 代理：SOCKS5 长连接可复用隧道，避免每次重新握手
+    """
+
+    def __init__(self, host: str = "www.mcmod.cn", timeout: int = 40, proxy: str = ""):
+        self.host = host
+        self.timeout = timeout
+        self.proxy = proxy
+        self.conn = None
+
+    def _new(self):
+        if self.proxy:
+            ph, pp = self.proxy.split(":")
+            return SocksHTTPSConnection(self.host, 443, (ph, int(pp)), self.timeout)
+        return http.client.HTTPSConnection(self.host, 443, timeout=self.timeout)
+
+    def get(self, path: str) -> tuple[int, str]:
+        if self.conn is None:
+            self.conn = self._new()
+        try:
+            self.conn.request("GET", path, headers={
+                "User-Agent": UA,
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Connection": "keep-alive",
+            })
+            r = self.conn.getresponse()
+            body = r.read()
+            status = r.status
+            if r.will_close:
+                self.conn.close()
+                self.conn = None
+            enc = r.headers.get_content_charset() or "utf-8"
+            text = body.decode(enc, errors="replace")
+            if "已被系统封禁" in text:
+                raise Banned("站点防火墙封禁（换 IP 或等解封）")
+            return status, text
+        except Banned:
+            raise
+        except Exception:
+            try:
+                if self.conn:
+                    self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
+            raise
+
+    def close(self):
+        try:
+            if self.conn:
+                self.conn.close()
+        except Exception:
+            pass
+        self.conn = None
 
 
 # ---------------------------------------------------------------- 解析
@@ -193,14 +288,22 @@ def cmd_ids(args) -> int:
 
 
 def cmd_crawl(args) -> int:
+    """多线程并发抓取。每个线程独占一个 sqlite 连接，写库串行化（WAL + timeout）。"""
     data = Path(args.data)
     ids_file = data / "ids.txt"
     if not ids_file.exists():
         print("先跑 ids 子命令")
         return 1
     all_ids = [int(x) for x in ids_file.read_text(encoding="utf-8").split()]
-    con = db(data)
-    done = {r[0] for r in con.execute("SELECT id FROM classes")}
+
+    # 主连接负责读已有 id 和最终统计；WAL 模式让只读进度查询不被阻塞
+    con0 = db(data)
+    con0.execute("PRAGMA journal_mode=WAL")
+    # 空页（error=empty）允许重抓一次；empty2 表示重抓后仍空，永久跳过
+    done = {r[0] for r in con0.execute(
+        "SELECT id FROM classes WHERE error IS NULL OR error NOT IN ('empty')")}
+    con0.close()
+
     todo = [i for i in all_ids if i not in done]
     if args.only_id:
         todo = args.only_id
@@ -212,59 +315,129 @@ def cmd_crawl(args) -> int:
         print("没有待抓的 id")
         return 0
 
+    workers = max(1, args.workers)
     print(f"待抓 {len(todo)} 个（库中已有 {len(done)}，sitemap 共 {len(all_ids)}）")
-    ok = empty = fail = 0
+    print(f"并发 {workers} 线程，每线程间隔 {args.delay}s，全局上限 {args.max_qps} 条/秒，"
+          f"代理 {args.proxy or '直连'}")
+
+    lock = threading.Lock()
+    counters = {"ok": 0, "empty": 0, "fail": 0, "done": 0, "ban": 0}
+    # 全局限速令牌：保证总速率不超过 max_qps
+    min_interval = 1.0 / args.max_qps if args.max_qps > 0 else 0.0
+    next_slot = [time.time()]
+    stop = threading.Event()
     t0 = time.time()
-    sql = f"INSERT OR REPLACE INTO classes ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})"
-    for n, cid in enumerate(todo, 1):
-        url = f"{BASE}/class/{cid}.html"
-        code, page = 0, ""
-        for attempt in range(3):
-            try:
-                code, page = fetch(url)
-            except Exception:
-                code, page = 0, ""
-            if code == 200:
+
+    sql = (f"INSERT OR REPLACE INTO classes ({','.join(COLUMNS)}) "
+           f"VALUES ({','.join('?' * len(COLUMNS))})")
+
+    def wait_slot():
+        """全局节拍：所有线程排队取时间片，避免瞬时并发过高。"""
+        if min_interval <= 0:
+            return
+        with lock:
+            now = time.time()
+            if next_slot[0] < now:
+                next_slot[0] = now
+            slot = next_slot[0]
+            next_slot[0] = slot + min_interval
+        delay = slot - time.time()
+        if delay > 0:
+            time.sleep(delay)
+
+    def worker(chunk):
+        sess = Session(proxy=args.proxy)
+        con = db(data)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=8000")
+        for cid in chunk:
+            if stop.is_set():
                 break
-            if code in (429, 503):
-                time.sleep(8 * (attempt + 1))
-                continue
-            break
+            wait_slot()
+            code, page, err = 0, "", ""
+            for attempt in range(3):
+                try:
+                    code, page = sess.get(f"/class/{cid}.html")
+                except Banned as e:
+                    if not stop.is_set():
+                        print(f"\n!! 检测到封禁页（{e}），立即停止所有线程", flush=True)
+                    stop.set()
+                    with lock:
+                        counters["ban"] = counters.get("ban", 0) + 1
+                    break
+                except Exception as e:
+                    code, page = 0, ""
+                    err = str(e)[:120]
+                if code == 200:
+                    break
+                if code in (429, 503):
+                    time.sleep(6 * (attempt + 1))
+                    continue
+                break
 
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
-        if code == 200 and page:
-            d = parse_class(page)
-            if d["chars"] < 100:
-                empty += 1
-                err = "empty"
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            if code == 200 and page:
+                d = parse_class(page)
+                if d["chars"] < 100:
+                    # 第一次空页记 empty（下次重抓），第二次仍空记 empty2（放弃）
+                    prev = con.execute("SELECT error FROM classes WHERE id=?", (cid,)).fetchone()
+                    err = "empty2" if prev and prev[0] == "empty" else "empty"
+                    row = [cid, d["name"], d["short_name"], d["en"], d["status"], d["source"],
+                           d["env"], d["views"], d["idx"], d["chars"], d["n_paras"],
+                           d["n_tables"], d["n_lists"], d["n_imgs"], d["n_headings"],
+                           d["headings"], d["intro_html"], d["intro_text"], now, code, err]
+                    with lock:
+                        counters["empty"] += 1
+                else:
+                    err = ""
+                    row = [cid, d["name"], d["short_name"], d["en"], d["status"], d["source"],
+                           d["env"], d["views"], d["idx"], d["chars"], d["n_paras"],
+                           d["n_tables"], d["n_lists"], d["n_imgs"], d["n_headings"],
+                           d["headings"], d["intro_html"], d["intro_text"], now, code, None]
+                    with lock:
+                        counters["ok"] += 1
             else:
-                ok += 1
-                err = None
-            row = [cid, d["name"], d["short_name"], d["en"], d["status"], d["source"], d["env"],
-                   d["views"], d["idx"], d["chars"], d["n_paras"], d["n_tables"], d["n_lists"],
-                   d["n_imgs"], d["n_headings"], d["headings"], d["intro_html"], d["intro_text"],
-                   now, code, err]
-            tag = f"{d['chars']}字 {d['views'] or '?'}浏览"
-        else:
-            fail += 1
-            row = [cid] + [""] * 9 + [0, 0, 0, 0, 0, 0, "[]", "", "", now, code, f"HTTP {code}"]
-            # 列数对齐
-            row = [cid, "", "", "", "", "", "", "", "", 0, 0, 0, 0, 0, 0, "[]", "", "", now, code, f"HTTP {code}"]
-            tag = f"失败 HTTP {code}"
-        con.execute(sql, row)
-        con.commit()
+                row = [cid, "", "", "", "", "", "", "", "", 0, 0, 0, 0, 0, 0,
+                       "[]", "", "", now, code, f"HTTP {code}"]
+                with lock:
+                    counters["fail"] += 1
 
-        if n % 25 == 0 or n == len(todo):
-            el = time.time() - t0
-            rate = n / el if el else 0
-            eta = (len(todo) - n) / rate / 60 if rate else 0
-            print(f"  [{n}/{len(todo)}] id={cid} {tag} | 成功 {ok} 空 {empty} 失败 {fail} "
-                  f"| {rate:.2f}页/秒 剩 {eta:.0f}分", flush=True)
+            for _ in range(3):
+                try:
+                    con.execute(sql, row)
+                    con.commit()
+                    break
+                except sqlite3.OperationalError:
+                    time.sleep(0.8)
+            with lock:
+                counters["done"] += 1
+                n = counters["done"]
+                if n % 25 == 0 or n == len(todo):
+                    el = time.time() - t0
+                    rate = n / el if el else 0
+                    eta = (len(todo) - n) / rate / 60 if rate else 0
+                    print(f"  [{n}/{len(todo)}] 成功 {counters['ok']} 空 {counters['empty']} "
+                          f"失败 {counters['fail']} | {rate:.2f}条/秒 剩 {eta:.0f}分", flush=True)
+            if args.delay:
+                time.sleep(args.delay + random.uniform(0, 0.25))
+        sess.close()
+        con.close()
 
-        if n < len(todo):
-            time.sleep(args.delay + random.uniform(0, 0.4))
-    con.close()
-    print(f"\n本轮：成功 {ok}，空/过短 {empty}，失败 {fail}")
+    # 轮转发牌，让 id 小的先抓
+    chunks = [todo[k::workers] for k in range(workers)]
+    threads = [threading.Thread(target=worker, args=(c,), daemon=True) for c in chunks if c]
+    try:
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+    except KeyboardInterrupt:
+        stop.set()
+        print("\n已中断，正在收尾…")
+        for th in threads:
+            th.join(timeout=5)
+
+    print(f"\n本轮：成功 {counters['ok']}，空/过短 {counters['empty']}，失败 {counters['fail']}")
     return 0
 
 
@@ -338,6 +511,9 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--delay", type=float, default=1.2)
     p.add_argument("--max-id", type=int, default=0, help="只抓 id 小于等于该值的（时间老的）")
+    p.add_argument("--proxy", default="", help="SOCKS5 代理 host:port（如 127.0.0.1:1080），留空为直连")
+    p.add_argument("--workers", type=int, default=2, help="并发线程数（默认 2，保守）")
+    p.add_argument("--max-qps", type=float, default=1.0, help="全局每秒最多请求数（默认 1.0，保守）")
     p.add_argument("--only-id", type=int, nargs="*")
     e = sub.add_parser("export")
     e.add_argument("--min-chars", type=int, default=800)
