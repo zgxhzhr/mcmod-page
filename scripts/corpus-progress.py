@@ -82,7 +82,7 @@ tick(); setInterval(tick, 2000);
 </script></body></html>"""
 
 
-def stats(data: Path, target: int) -> dict:
+def stats(data: Path, target: int, ids_file: str = "") -> dict:
     db = data / "mcmod.db"
     out = {"done": 0, "ok": 0, "bad": 0, "pct": 0.0, "rate": 0.0,
            "eta_min": -1, "target": target, "now": datetime.now().strftime("%H:%M:%S"),
@@ -93,12 +93,26 @@ def stats(data: Path, target: int) -> dict:
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.0)
     except Exception:
         return out
+    id_filter = ""
+    id_params: tuple = ()
+    if ids_file:
+        fp = Path(ids_file)
+        if fp.exists():
+            ids = [int(x) for x in __import__("re").findall(r"\d+", fp.read_text(encoding="utf-8"))]
+            if ids:
+                ph = ",".join("?" * len(ids))
+                id_filter = f" WHERE id IN ({ph})"
+                id_params = tuple(ids)
+                if target <= 0:
+                    target = len(ids)
+                    out["target"] = target
+
     try:
         row = con.execute(
             "SELECT COUNT(*), "
             "SUM(CASE WHEN chars>=100 THEN 1 ELSE 0 END), "
             "SUM(CASE WHEN chars>=20 AND chars<100 THEN 1 ELSE 0 END), "
-            "SUM(CASE WHEN chars<20 OR chars IS NULL THEN 1 ELSE 0 END) FROM classes").fetchone()
+            "SUM(CASE WHEN chars<20 OR chars IS NULL THEN 1 ELSE 0 END) FROM classes" + id_filter, id_params).fetchone()
         done = row[0] or 0
         out["done"] = done
         out["ok"] = row[1] or 0        # 长文（≥100 字，语料主力）
@@ -150,7 +164,8 @@ def bar(pct: float, width: int = 40) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default=str(DEFAULT_DATA))
-    ap.add_argument("--target", type=int, default=5000)
+    ap.add_argument("--target", type=int, default=0, help="目标条数；0 = 用库总数或 ids-file 条数")
+    ap.add_argument("--ids-file", default="", help="按 id 列表算进度（如收藏夹 1224 条）")
     ap.add_argument("--watch", action="store_true")
     ap.add_argument("--interval", type=float, default=2.0)
     ap.add_argument("--serve", type=int, default=0)
@@ -161,7 +176,7 @@ def main() -> int:
         class H(BaseHTTPRequestHandler):
             def do_GET(self):
                 if self.path.startswith("/api"):
-                    body = json.dumps(stats(data, args.target), ensure_ascii=False).encode()
+                    body = json.dumps(stats(data, args.target, args.ids_file), ensure_ascii=False).encode()
                     ct = "application/json; charset=utf-8"
                 else:
                     body = PAGE.encode()
@@ -185,7 +200,7 @@ def main() -> int:
         return 0
 
     def render() -> str:
-        s = stats(data, args.target)
+        s = stats(data, args.target, args.ids_file)
         eta = f"剩 {s['eta_min']} 分" if s["eta_min"] >= 0 else "—"
         line1 = (f"  [{bar(s['pct'])}] {s['pct']:5.1f}%  "
                  f"{s['done']}/{s['target']}  {eta}")

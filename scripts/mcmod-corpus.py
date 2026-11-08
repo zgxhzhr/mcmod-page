@@ -314,12 +314,22 @@ def cmd_crawl(args) -> int:
     con0 = db(data)
     con0.execute("PRAGMA journal_mode=WAL")
     # 空页（error=empty）允许重抓一次；empty2 表示重抓后仍空，永久跳过
+    # 注：error=empty 允许重抓一次；http_status=0（请求失败）也允许重抓
     done = {r[0] for r in con0.execute(
-        "SELECT id FROM classes WHERE error IS NULL OR error NOT IN ('empty')")}
+        "SELECT id FROM classes WHERE (error IS NULL OR error NOT IN ('empty')) "
+        "AND (http_status IS NULL OR http_status <> 0)")}
     con0.close()
 
     todo = [i for i in all_ids if i not in done]
-    if args.only_id:
+    if args.ids_file:
+        fp = Path(args.ids_file)
+        if not fp.exists():
+            print(f"!! ids 文件不存在：{fp}")
+            return 5
+        todo = [int(x) for x in re.findall(r"\d+", fp.read_text(encoding="utf-8"))]
+        # 文件里是完整 URL 也能解析
+        print(f"从 {fp.name} 读到 {len(todo)} 个 id")
+    elif args.only_id:
         todo = args.only_id
     if args.max_id:
         todo = [i for i in todo if i <= args.max_id]
@@ -376,7 +386,7 @@ def cmd_crawl(args) -> int:
           f"代理 {args.proxy or '直连'}")
 
     lock = threading.Lock()
-    counters = {"ok": 0, "empty": 0, "fail": 0, "done": 0, "ban": 0}
+    counters = {"ok": 0, "empty": 0, "fail": 0, "done": 0, "ban": 0, "streak": 0}
     # 全局限速令牌：保证总速率不超过 max_qps
     min_interval = 1.0 / args.max_qps if args.max_qps > 0 else 0.0
     next_slot = [time.time()]
@@ -445,6 +455,12 @@ def cmd_crawl(args) -> int:
                     # 第一次空页记 empty（下次重抓），第二次仍空记 empty2（放弃）
                     prev = con.execute("SELECT error FROM classes WHERE id=?", (cid,)).fetchone()
                     err = "empty2" if prev and prev[0] == "empty" else "empty"
+                    row = [cid, d["name"], d["short_name"], d["en"], d["status"], d["source"],
+                           d["env"], d["views"], d["idx"], d["chars"], d["n_paras"],
+                           d["n_tables"], d["n_lists"], d["n_imgs"], d["n_headings"],
+                           d["headings"], d["intro_html"], d["intro_text"], now, code, err]
+                    with lock:
+                        counters["empty"] += 1
                 elif d["chars"] < 100:
                     # 20~99 字：页面拿到了，但内容太短，对语料无价值，标记为 short 保留
                     err = "short"
@@ -477,6 +493,14 @@ def cmd_crawl(args) -> int:
                     time.sleep(0.8)
             with lock:
                 counters["done"] += 1
+                # 连续失败熔断：连续 12 次拿不到页面，说明代理/站点异常，停止
+                if code == 200 and page:
+                    counters["streak"] = 0
+                else:
+                    counters["streak"] = counters.get("streak", 0) + 1
+                    if counters["streak"] >= 12 and not stop.is_set():
+                        print(f"\n!! 连续 {counters['streak']} 次请求失败，疑似代理断开或站点异常，停止", flush=True)
+                        stop.set()
                 n = counters["done"]
                 if n % 25 == 0 or n == len(todo):
                     el = time.time() - t0
@@ -583,6 +607,7 @@ def main() -> int:
     p.add_argument("--workers", type=int, default=2, help="并发线程数（默认 2，保守）")
     p.add_argument("--max-qps", type=float, default=1.0, help="全局每秒最多请求数（默认 1.0，保守）")
     p.add_argument("--only-id", type=int, nargs="*")
+    p.add_argument("--ids-file", default="", help="id 列表文件（每行一个 id，或含 /class/N.html 的 URL 列表）")
     e = sub.add_parser("export")
     e.add_argument("--min-chars", type=int, default=800)
     sub.add_parser("stats")
