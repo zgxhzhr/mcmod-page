@@ -56,9 +56,9 @@ SYMMETRY = [
 ]
 # 口语化总结/定性句
 SUMMARY_VERBS = [
-    re.compile(r"(这就是|这便是)[^。]{2,30}(过程|体验|乐趣|意义|价值)"),
-    re.compile(r"(而不只是|而不仅仅是|而不是)[^。]{2,30}"),
-    re.compile(r"(并非|不是)[^。]{2,20}[，,]?而是[^。]{2,30}"),
+    # 只保留真正的升华句式；「而不是 X」属于正常对比表达，不能算 AI 腔
+    re.compile(r"(这就是|这便是)[^。]{2,30}(教学过程|意义|价值|灵魂|精髓)"),
+    re.compile(r"(这不仅是|不仅仅是)[^。]{2,30}(更是|还是)[^。]{2,30}"),
 ]
 # 三连排比 / 递进堆叠
 PARALLEL = [
@@ -202,8 +202,8 @@ def check(raw: str, page_type: str = "page") -> dict:
                 merged[-1] = (merged[-1][0], e, merged[-1][2])
         else:
             merged.append((s, e, g))
-    if merged:
-        add("排比/对称/定性句式", min(24, 6 * len(merged)),
+    if len(merged) >= 2:
+        add("排比/对称/定性句式", min(16, 4 * len(merged)),
             f"命中 {len(merged)} 处",
             [g.replace("\n", " ")[:50] for _, _, g in merged[:3]])
 
@@ -223,8 +223,9 @@ def check(raw: str, page_type: str = "page") -> dict:
     if hollow:
         cnt = sum(n for _, n in hollow)
         per_k = cnt / max(total_chars, 1) * 1000
-        if per_k >= 1.0:
-            add("空洞形容词", min(15, int(per_k * 3)),
+        # 单个「强大的战利品」这类正常用法不算问题：要求密度够高且词种够多
+        if per_k >= 12.0 and len(hollow) >= 3:
+            add("空洞形容词", min(15, int(per_k * 2)),
                 f"{cnt} 处（每千字 {per_k:.1f} 个）：" +
                 "、".join(f"{w}×{n}" for w, n in sorted(hollow, key=lambda x: -x[1])[:5]),
                 [w for w, _ in hollow[:3]])
@@ -238,23 +239,24 @@ def check(raw: str, page_type: str = "page") -> dict:
 
     # 6. 句长均匀度
     lens = [len(s) for s in sents]
-    if len(lens) >= 5:
+    # 短文本里句长方差不具统计意义，容易把正常短文判成 AI
+    if len(lens) >= 8 and total_chars >= 400:
         c = cv(lens)
-        if c < 0.22:
-            add("句长过于均匀", 15,
-                f"句长变异系数 {c:.2f}（人写通常 ≥0.30，AI 常 <0.22）")
-        elif c < 0.28:
-            add("句长偏均匀", 8, f"句长变异系数 {c:.2f}")
+        if c < 0.18:
+            add("句长过于均匀", 12,
+                f"句长变异系数 {c:.2f}（{len(lens)} 句，人写通常 ≥0.30）")
+        elif c < 0.24:
+            add("句长偏均匀", 6, f"句长变异系数 {c:.2f}（{len(lens)} 句）")
 
     # 6.5 段落长度均匀度
     p_lens = [len(p) for p in paras if len(p) >= 10]
-    if len(p_lens) >= 5:
+    if len(p_lens) >= 6 and total_chars >= 600:
         pc = cv(p_lens)
-        if pc < 0.30:
-            add("段落长度过于均匀", 8, f"段落变异系数 {pc:.2f}（人写通常 ≥0.40）")
+        if pc < 0.22:
+            add("段落长度过于均匀", 6, f"段落变异系数 {pc:.2f}（{len(p_lens)} 段）")
 
     # 7. 超长句
-    if lens:
+    if lens and total_chars >= 400:
         long_n = sum(1 for L in lens if L > 60)
         ratio = long_n / len(lens)
         if ratio > 0.25:
@@ -266,17 +268,19 @@ def check(raw: str, page_type: str = "page") -> dict:
     if nom:
         cnt = sum(n for _, n in nom)
         per_k = cnt / max(total_chars, 1) * 1000
-        if per_k >= 3.0:
+        if per_k >= 15.0:
             add("名词化抽象表达", min(12, int(per_k)),
                 f"{cnt} 处（每千字 {per_k:.1f}）：" +
                 "、".join(f"{w}×{n}" for w, n in sorted(nom, key=lambda x: -x[1])[:4]))
 
     # 9. 感叹与反问
+    # 感叹/反问：中文百科里玩家常用，只在资料页且数量明显偏多时才提示
     exclam = plain.count("！") + plain.count("!")
     question = len(re.findall(r"[^。]{2,}？", plain))
-    if exclam or question:
-        add("感叹句/反问句", min(12, 3 * (exclam + question)),
-            f"感叹 {exclam} 处、反问 {question} 处（资料页应为 0）")
+    limit = 2 if page_type == "item" else 6
+    if exclam + question > limit:
+        add("感叹/反问过多", min(6, (exclam + question - limit)),
+            f"感叹 {exclam} 处、反问 {question} 处（阈值 {limit}）")
 
     # 10. 过度口语（仅资料页严格要求）
     col = [(w, plain.count(w)) for w in COLLOQUIAL if plain.count(w)]
@@ -300,8 +304,15 @@ def check(raw: str, page_type: str = "page") -> dict:
                     add("标题跨级", 6, f"出现 h{a} → h{b} 的跨级")
                     break
         for tbl in RE_TABLE.findall(original):
-            if RE_TR.search(tbl) and not RE_TH.search(tbl):
-                add("表格缺表头", 6, "存在没有 <th> 的表格")
+            if not RE_TR.search(tbl):
+                continue
+            # 画廊表格（单元格以图片为主）不需要 th，豁免
+            n_img = len(re.findall(r"<img", tbl, re.I))
+            n_td = len(re.findall(r"<td", tbl, re.I))
+            if n_img and n_img * 2 >= max(n_td, 1):
+                continue
+            if not RE_TH.search(tbl):
+                add("表格缺表头", 6, "存在没有 <th> 的数据表格")
                 break
     for pat in RE_MD_RESIDUE:
         m = pat.search(original)

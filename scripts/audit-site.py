@@ -44,7 +44,7 @@ SEVERITY = {
 }
 KIND_LABEL = {
     "empty": "内容为空/极短（<100字）",
-    "short": "内容偏少（100–300字）",
+    "short": "内容偏少（100–150字）",
     "no-headings": "无分节（缺 [hN] 标题结构）",
     "ai-tell": "AI 味过重",
     "format": "格式问题",
@@ -128,7 +128,8 @@ def main() -> int:
         if chars < 100:
             emit("empty", f"{chars} 字")
             continue
-        if chars < 300:
+        # 小型模组 150–300 字属正常，不作为问题上报
+        if chars < 150:
             emit("short", f"{chars} 字")
 
         # 3. 无分节（内容够多却没结构）

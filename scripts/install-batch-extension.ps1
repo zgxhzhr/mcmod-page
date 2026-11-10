@@ -28,7 +28,7 @@ $manifest = @'
 {
   "manifest_version": 3,
   "name": "MC百科 批量新增",
-  "version": "2.33",
+  "version": "2.35",
   "description": "在 MC百科 新增资料页注入「批量新增」按钮，批量填充并提交资料。",
   "content_scripts": [
     {

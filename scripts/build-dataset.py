@@ -49,11 +49,22 @@ DEFAULT_DATA = Path(r"E:\Mod\百科-语料")
 SCRIPT_DIR = Path(__file__).parent
 
 INSTRUCTION = (
-    "你是 MC百科（mcmod.cn）的资深编辑。请把下面这段模组介绍改写成规范、平实、严谨的百科文风：\n"
-    "1. 保留全部数值、名称、触发条件与机制，不得删减或改写；\n"
-    "2. 去掉套话、排比、升华句、空洞形容词与模板化收尾；\n"
-    "3. 句子长短交错，避免每句等长；\n"
-    "4. 只输出改写后的正文，不要解释。\n\n"
+    "你是 MC百科（mcmod.cn）的编辑。请按主站编辑规范改写下面这段模组介绍。\n"
+    "\n"
+    "【主站规范（审核会按条退回）】\n"
+    "1. 不写主观词句、第一人称（我觉得/小编/个人认为）——规范 1\n"
+    "2. 不写不确定语句（据说/貌似/应该）——规范 2\n"
+    "3. 不用不规范用语、颜文字、无帮助的 emoji——规范 3\n"
+    "4. 不写冗余句（欢迎补充/介绍就到这里）——规范 29\n"
+    "5. 不堆叠标点（连续感叹号、连续句号、连续问号）——规范 19\n"
+    "6. 标点完整：句末有句号，全半角统一——规范 12\n"
+    "7. 不用 PS./注：等前后缀，注解融入正文——规范 24\n"
+    "8. 提到版本特性要写具体版本号，禁用新版/旧版——规范 23\n"
+    "9. 不凑字数、不空泛：要讲清做什么、怎么用、怎么获得——规范 18\n"
+    "10. 保留原文全部数值、名称、机制与获取方式，不得改动\n"
+    "\n"
+    "只输出改写后的正文，不要解释、不要加标题。\n"
+    "\n"
     "待改写：\n{poisoned}"
 )
 
@@ -147,8 +158,11 @@ def main() -> int:
     ap.add_argument("--ids-file", required=True, help="主资料 id 列表（收藏夹 1224 条）")
     ap.add_argument("--extra-ids", default="", help="补充资料 id 列表（可选）")
     ap.add_argument("--min-chars", type=int, default=600)
+    ap.add_argument("--exclude-ids", default="", help="要排除的 id（逗号或文件路径），已知 AI 生成/不合规的页面")
     ap.add_argument("--require-headings", action="store_true", default=True)
     ap.add_argument("--poison-strength", type=float, default=0.85)
+    ap.add_argument("--sample-min", type=int, default=300, help="单样本最小字数")
+    ap.add_argument("--sample-max", type=int, default=900, help="单样本最大字数")
     ap.add_argument("--split", default="0.8,0.1,0.1", help="train,val,test 比例")
     ap.add_argument("--out", default=str(DEFAULT_DATA / "dataset"))
     ap.add_argument("--seed", type=int, default=20261108)
@@ -160,6 +174,16 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     primary = [int(x) for x in re.findall(r"\d+", Path(args.ids_file).read_text(encoding="utf-8"))]
+    excluded: set[int] = set()
+    if args.exclude_ids:
+        ep = Path(args.exclude_ids)
+        src = ep.read_text(encoding="utf-8") if ep.exists() else args.exclude_ids
+        excluded = {int(x) for x in re.findall(r"\d+", src)}
+        if excluded:
+            before = len(primary)
+            primary = [i for i in primary if i not in excluded]
+            print(f"排除 {len(excluded)} 个已知不合规页面：{sorted(excluded)[:8]}{'...' if len(excluded)>8 else ''}")
+            print(f"  主资料 {before} → {len(primary)}")
     extra = [int(x) for x in re.findall(r"\d+", Path(args.extra_ids).read_text(encoding="utf-8"))] if args.extra_ids else []
     print(f"主资料 {len(primary)} 个 id" + (f"，补充 {len(extra)} 个" if extra else ""))
 
@@ -202,7 +226,7 @@ def main() -> int:
     rnd = random.Random(args.seed)
     samples = []
     for r, prio, body in kept:
-        for piece in split_into_samples(body):
+        for piece in split_into_samples(body, args.sample_min, args.sample_max):
             real = clean_text(piece)
             if len(re.sub(r"\s", "", real)) < args.min_chars * 0.5:
                 continue

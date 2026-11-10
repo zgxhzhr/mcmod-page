@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.33
+// @version      2.35
 // @description  /item/add/* 批量新增；/item/list/* 读取列表与编辑链接（为批量编辑做准备）
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -19,7 +19,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.33';
+  const MB_VERSION = '2.35';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -39,7 +39,7 @@
   /** 清掉 DOM 里版本不同的旧面板：扩展与篡改猴运行在不同隔离环境，
    *  window 标记互相看不见，但 DOM 共用，所以按面板上的版本号判断。 */
   function removeStalePanels() {
-    ['mb-panel', 'mb-list-panel', 'mb-edit-panel'].forEach((id) => {
+    ['mb-panel', 'mb-list-panel', 'mb-edit-panel', 'mb-verify-panel', 'mb-addq-panel'].forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
       const txt = el.innerText || '';
@@ -122,7 +122,7 @@
   // 同页可能同时存在「篡改猴旧版」和「扩展新版」：只有版本相同才复用，
   // 否则清掉旧面板由本脚本接管（避免旧版一直显示 v2.6）
   if (window.__mbBatchLoaded) {
-    const panels = ['mb-panel', 'mb-list-panel', 'mb-edit-panel']
+    const panels = ['mb-panel', 'mb-list-panel', 'mb-edit-panel', 'mb-verify-panel', 'mb-addq-panel']
       .map((id) => document.getElementById(id)).filter(Boolean);
     const sameVer = panels.some((el) => (el.innerText || '').indexOf('v' + MB_VERSION) >= 0);
     if (sameVer) {
@@ -266,6 +266,32 @@
     return true;
   }
 
+  /** 有图标时确保「删除大/小图标」两个勾选框处于未选中。填表开始与结束各调一次。 */
+  function ensureIconsNotDeleted() {
+    const ownLbl = (el) => {
+      if (el.labels && el.labels.length) {
+        return [...el.labels].map((l) => l.textContent || '').join(' ');
+      }
+      let n = el.nextSibling, out = '';
+      for (let i = 0; n && i < 3; i += 1, n = n.nextSibling) {
+        out += (n.textContent || '') + ' ';
+      }
+      return out;
+    };
+    const isDel = (el) => {
+      const lbl = ownLbl(el).replace(/\s/g, '');
+      const attr = ((el.getAttribute('title') || '') + (el.name || '') + (el.id || '')).replace(/\s/g, '');
+      return /删除(大|小|大小)图标/.test(lbl) || /删除(大|小|大小)图标/.test(attr);
+    };
+    const dels = [...document.querySelectorAll('input[type=checkbox]')].filter(isDel);
+    let unchecked = 0;
+    for (const box of dels) {
+      if (box.checked) { box.click(); unchecked += 1; }
+    }
+    if (unchecked) log('已取消「删除图标」勾选 ' + unchecked + ' 个（本次带图标）');
+    return { found: dels.length, unchecked };
+  }
+
   async function fillOne(it) {
     ensureType(it.type);
     await sleep(1200);
@@ -314,6 +340,7 @@
     }
 
     if (it.icon32) {
+      ensureIconsNotDeleted();
       setVal(q('#icon-32x-editor'), it.icon32);
       setVal(q('#icon-32x'), it.icon32);
       await sleep(500);
@@ -337,6 +364,9 @@
       }
     }
     await sleep(500);
+    // 填表过程中「同步至大图标」等操作可能重绘并恢复勾选，这里兜底一次
+    if (it.icon32) ensureIconsNotDeleted();
+    await sleep(200);
   }
 
   async function submitOne() {

@@ -266,17 +266,42 @@ def parse_class(html_text: str) -> dict:
     for bad in node.xpath('.//*[contains(@class,"page-ul") or contains(@class,"class-edit-block")]'):
         bad.getparent().remove(bad)
 
-    parts = []
+    # 只收「叶子块」：<li><p>x</p></li> 这种结构若同时收 li 与 p，正文会重复两遍
+    BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "li", "td", "th", "div", "table", "tr", "ul", "ol", "pre"}
+    LEAF_TAGS = {"p", "h1", "h2", "h3", "h4", "pre"}
+    parts: list = []
     paras = 0
-    for el in node.iter():
-        if not isinstance(el.tag, str):
+
+    def walk(el):
+        nonlocal paras
+        for c in el:
+            if not isinstance(c.tag, str):
+                continue
+            if c.tag in LEAF_TAGS:
+                if c.tag == "p":
+                    paras += 1
+                t = txt(c)
+                if t:
+                    parts.append(t)
+            elif c.tag in ("li", "td", "th"):
+                if any(isinstance(x.tag, str) and x.tag in BLOCK_TAGS for x in c):
+                    walk(c)
+                else:
+                    t = txt(c)
+                    if t:
+                        parts.append(t)
+            else:
+                walk(c)
+
+    walk(node)
+
+    # 相邻重复段去重（解析重复的典型表现）
+    dedup: list = []
+    for piece in parts:
+        if dedup and (piece == dedup[-1] or (len(piece) > 20 and piece in dedup[-1])):
             continue
-        if el.tag == "p":
-            paras += 1
-        if el.tag in ("p", "h1", "h2", "h3", "h4", "li", "td", "th"):
-            t = txt(el)
-            if t:
-                parts.append(t)
+        dedup.append(piece)
+    parts = dedup
     d["n_paras"] = paras
     d["intro_text"] = "\n".join(parts).strip()
     d["chars"] = len(d["intro_text"].replace("\n", ""))
