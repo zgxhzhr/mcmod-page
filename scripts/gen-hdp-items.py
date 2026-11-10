@@ -81,7 +81,7 @@ def main() -> int:
             "maxstack": it["maxstack"],
             "remark": ("Headphones 新增资料页：名称取自 lang/en_us.json（模组没有 zh_cn，按规则只写英文）。"
                        "用法与配方依据 HeadphoneItem / HeadphonesControlItem 的反编译结果与 data 下的合成配方。"
-                       "图标由物品的 Blockbench 3D 模型按 GUI 视角渲染而成。辛苦喵呜机了"),
+                       "辛苦喵呜机了"),
             "html": it["html"],
             "icon32": icon,
         })

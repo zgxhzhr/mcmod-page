@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.35
+// @version      2.38
 // @description  /item/add/* 批量新增；/item/list/* 读取列表与编辑链接（为批量编辑做准备）
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -19,7 +19,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.35';
+  const MB_VERSION = '2.38';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -266,8 +266,13 @@
     return true;
   }
 
-  /** 有图标时确保「删除大/小图标」两个勾选框处于未选中。填表开始与结束各调一次。 */
-  function ensureIconsNotDeleted() {
+  /** 按「有没有图标」设置「删除大/小图标」两个勾选。
+   *  mcmod 上传小图标后会自动同步出大图标，所以只要有任意一张图，两个框都不能勾；
+   *  只有两张都没有时才两个都勾。分开处理反而会把大图标判成空值。
+   *  @param {boolean} has32  是否提供了 icon32
+   *  @param {boolean} has128 是否提供了 icon128
+   */
+  function syncIconDeleteBoxes(has32, has128) {
     const ownLbl = (el) => {
       if (el.labels && el.labels.length) {
         return [...el.labels].map((l) => l.textContent || '').join(' ');
@@ -283,13 +288,16 @@
       const attr = ((el.getAttribute('title') || '') + (el.name || '') + (el.id || '')).replace(/\s/g, '');
       return /删除(大|小|大小)图标/.test(lbl) || /删除(大|小|大小)图标/.test(attr);
     };
+    const hasIcon = !!(has32 || has128);
     const dels = [...document.querySelectorAll('input[type=checkbox]')].filter(isDel);
-    let unchecked = 0;
+    let changed = 0;
     for (const box of dels) {
-      if (box.checked) { box.click(); unchecked += 1; }
+      const wantDeleted = !hasIcon;
+      if (box.checked !== wantDeleted) { box.click(); changed += 1; }
     }
-    if (unchecked) log('已取消「删除图标」勾选 ' + unchecked + ' 个（本次带图标）');
-    return { found: dels.length, unchecked };
+    if (changed) log(hasIcon ? '有图标，已取消「删除图标」勾选 ' + changed + ' 个（大小图标自动同步）'
+                             : '无图标，已勾选「删除图标」' + changed + ' 个');
+    return { found: dels.length, changed };
   }
 
   async function fillOne(it) {
@@ -339,8 +347,8 @@
       else log('没找到「删除大图标/删除小图标」勾选框', '#fbbf24');
     }
 
-    if (it.icon32) {
-      ensureIconsNotDeleted();
+    if (it.icon32 || it.icon128) {
+      syncIconDeleteBoxes(!!it.icon32, !!it.icon128);
       setVal(q('#icon-32x-editor'), it.icon32);
       setVal(q('#icon-32x'), it.icon32);
       await sleep(500);
@@ -355,17 +363,26 @@
       }
     }
 
-    if (it.html) {
+    // html 字段存在就写，空字符串表示「显式清空正文」
+    if (it.html !== undefined) {
       const cm = q('.CodeMirror');
       if (cm && cm.CodeMirror) cm.CodeMirror.setValue(it.html);
       else {
         const frame = q('#ueditor_0');
         if (frame && frame.contentDocument && frame.contentDocument.body) frame.contentDocument.body.innerHTML = it.html;
+        // UEditor 空内容时需要清掉残留的占位段落
+        if (it.html === '') {
+          try {
+            const ue = frame && frame.contentWindow && frame.contentWindow.UE;
+            const ed = ue && ue.getEditor && ue.getEditor('ueditor_0');
+            if (ed && ed.setContent) ed.setContent('');
+          } catch (e) { /* 忽略 */ }
+        }
       }
     }
     await sleep(500);
     // 填表过程中「同步至大图标」等操作可能重绘并恢复勾选，这里兜底一次
-    if (it.icon32) ensureIconsNotDeleted();
+    if (it.icon32 || it.icon128) syncIconDeleteBoxes(!!it.icon32, !!it.icon128);
     await sleep(200);
   }
 
@@ -1010,9 +1027,18 @@
       await sleep(400);
     }
     let editorPath = null;
-    if (item.html) {
+    // html 字段存在就写，空字符串表示「显式清空正文」
+    if (item.html !== undefined) {
       editorPath = setEditorHtml(item.html);
       if (!editorPath) throw new Error('没找到正文编辑器（CodeMirror / UEditor 都没命中）');
+      if (item.html === '') {
+        try {
+          const frame = q('#ueditor_0');
+          const ue = frame && frame.contentWindow && frame.contentWindow.UE;
+          const ed = ue && ue.getEditor && ue.getEditor('ueditor_0');
+          if (ed && ed.setContent) ed.setContent('');
+        } catch (e) { /* 忽略 */ }
+      }
     }
     // 覆盖前先存档旧正文，供回滚与 AI 对比
     try {

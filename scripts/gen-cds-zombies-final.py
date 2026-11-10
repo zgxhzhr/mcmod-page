@@ -122,7 +122,7 @@ def main() -> int:
             "regname": f"{NS}:{rid}", "category": "敌对生物", "type": "生物/实体",
             "remark": ("Crafting Dead: Survival 新增生物资料页：中文名取自 lang/zh_cn.json，"
                        "血量与伤害取自 ServerConfig 的默认值，行为与掉落依据各 ZombieHandler 与 "
-                       "loot_tables 下的定义。实体没有静态贴图，已勾选删除大小图标。辛苦喵呜机了"),
+                       "loot_tables 下的定义。辛苦喵呜机了"),
             "html": body(zh, hp, dmg, ranged, bp, None, trait),
             "icon32": "",
         })
