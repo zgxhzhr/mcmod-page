@@ -105,9 +105,23 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
         if not rule_allows(lib.get("rules")):
             continue
         art = (lib.get("downloads") or {}).get("artifact")
-        if not art:
+        if art:
+            p = libs_dir / art["path"]
+            if p.exists():
+                cp.append(str(p))
             continue
-        p = libs_dir / art["path"]
+        # 没有 downloads.artifact 的条目（Fabric 由 PCL 安装时常见）：
+        # 用 Maven 坐标 group:artifact:version[:classifier] 推导本地路径
+        name = lib.get("name") or ""
+        parts = name.split(":")
+        if len(parts) < 3:
+            continue
+        # 注意：这里不能叫 version —— 会覆盖函数参数的 version，
+        # 导致后面拼「版本自己的 jar」时路径全错（踩过：MC jar 因此没进 classpath）
+        group, artifact, lib_version = parts[0], parts[1], parts[2]
+        classifier = parts[3] if len(parts) > 3 else ""
+        fname = f"{artifact}-{lib_version}" + (f"-{classifier}" if classifier else "") + ".jar"
+        p = libs_dir / group.replace(".", "/") / artifact / lib_version / fname
         if p.exists():
             cp.append(str(p))
     # 版本自己的 jar（PCL 生成的扁平版本是完整客户端 jar）

@@ -36,7 +36,8 @@ MC_DIR = Path(r"E:\PCL\.minecraft")
 TOOL_INFO = {
     "lms":   {"modid": "let_me_see_see", "out": "let_me_see_see"},   # -D 覆盖后仍以此为准
     "lmsent": {"modid": "let_me_see_see", "out": "let_me_see_see"},   # fork 版：实体导出
-    "iconr": {"modid": "iconr",          "out": "IconRendererOutput"},
+    "iconr": {"modid": "iconr",          "out": "IconRenderer/Json"},
+    "iconr2": {"modid": "iconr",         "out": "IconRenderer/Json"},  # fork 版：自触发
     "irr":   {"modid": "item_render_rebirth", "out": "export"},
 }
 
@@ -259,6 +260,11 @@ def main() -> int:
     ap.add_argument("--hidden", action="store_true", help="把客户端窗口移到屏幕外，不抢前台")
     ap.add_argument("--console", action="store_true",
                     help="用 java.exe 启动并把 agent 的 stdout 落盘到 work/agent.log（调试用）")
+    ap.add_argument("--delay", type=int, default=60, help="自触发模式下进世界后等多少 tick")
+    ap.add_argument("--self-trigger", action="store_true",
+                    help="模组自己触发导出（读 -Dmcauto.modid），不注入 agent。"
+                         "Fabric 版 IconRenderer fork 用这个：运行时是 intermediary 名字，"
+                         "agent 按 mojmap 反射会失效")
     ap.add_argument("--overrides", default=r"E:\Mod\百科-语料\mcauto-overrides",
                     help="手工图标覆盖目录：<overrides>/<modid>/<path>.png")
     ap.add_argument("--target-modid", default="",
@@ -312,8 +318,14 @@ def main() -> int:
         sys.path.insert(0, sys_path)
     import launcher  # noqa: E402
 
-    agent_arg = (f"-javaagent:{AGENT}=mode={a.mode},timeout={a.timeout},"
-                 f"gameDir={game}")
+    if a.self_trigger:
+        # 模组自己在客户端 tick 里等世界加载完再导出；只传 -D
+        agent_arg = f"-Dmcauto.modid={target}"
+        extra = [f"-Dmcauto.delay={getattr(a, 'delay', 60)}"]
+    else:
+        agent_arg = (f"-javaagent:{AGENT}=mode={a.mode},timeout={a.timeout},"
+                     f"gameDir={game}")
+        extra = []
     argv = launcher.build(
         Path(a.mc_dir), a.version, game, a.username,
         launcher.find_java(a.version),
@@ -321,7 +333,7 @@ def main() -> int:
         None, None)  # 不覆盖输出目录：工具默认就写在 gameDir 下
     # 把 agent 插到 mainClass 之前（-javaagent 必须在 -jar/-cp 语境里靠前）
     mi = argv.index(next(x for x in argv if "Launcher" in x or "Main" in x))
-    argv = argv[:mi] + [agent_arg] + argv[mi:]
+    argv = argv[:mi] + [agent_arg] + extra + argv[mi:]
     # 1.20+ 才有 quickPlay：直接进世界，跳过主菜单
     if _supports_quickplay(a.version):
         argv += ["--quickPlaySingleplayer", "mcauto"]
@@ -351,6 +363,10 @@ def main() -> int:
     prod_dir = game / TOOL_INFO[a.mode]["out"]
     ok = wait_done(game, proc, a.timeout, prod_dir)
     stop_ev.set()
+    # 导出完成后再解析实际产物目录：IconRenderer 是 Json/<modid>/<modid>-items.json，
+    # 导出前这个子目录还不存在
+    if target and (prod_dir / target).is_dir():
+        prod_dir = prod_dir / target
 
     if not a.keep_open and proc.poll() is None:
         proc.terminate()
