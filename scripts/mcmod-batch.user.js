@@ -1,15 +1,17 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.38
-// @description  /item/add/* 批量新增；/item/list/* 读取列表与编辑链接（为批量编辑做准备）
+// @version      2.41
+// @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
 // @match        https://www.mcmod.cn/item/list/*
 // @match        https://www.mcmod.cn/item/edit/*
+// @match        https://www.mcmod.cn/class/edit/*
 // @match        https://www.mcmod.cn/verify*
 // @match        https://www1.mcmod.cn/item/list/*
 // @match        https://www1.mcmod.cn/item/edit/*
+// @match        https://www1.mcmod.cn/class/edit/*
 // @match        https://www1.mcmod.cn/verify*
 // @grant        none
 // @run-at       document-idle
@@ -19,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.38';
+  const MB_VERSION = '2.41';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -39,7 +41,7 @@
   /** 清掉 DOM 里版本不同的旧面板：扩展与篡改猴运行在不同隔离环境，
    *  window 标记互相看不见，但 DOM 共用，所以按面板上的版本号判断。 */
   function removeStalePanels() {
-    ['mb-panel', 'mb-list-panel', 'mb-edit-panel', 'mb-verify-panel', 'mb-addq-panel'].forEach((id) => {
+    ['mb-panel', 'mb-list-panel', 'mb-edit-panel', 'mb-class-edit-panel', 'mb-verify-panel', 'mb-addq-panel'].forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
       const txt = el.innerText || '';
@@ -167,6 +169,14 @@
   if (editMatch) {
     removeStalePanels();
     initEditPanel(editMatch[1]);
+    return;
+  }
+
+  // ---------- 模组介绍编辑页（/class/edit/<classId>-<subId>/） ----------
+  const classEditMatch = location.pathname.match(/\/class\/edit\/(\d+)/);
+  if (classEditMatch) {
+    removeStalePanels();
+    initClassEditPanel(classEditMatch[1]);
     return;
   }
 
@@ -347,8 +357,9 @@
       else log('没找到「删除大图标/删除小图标」勾选框', '#fbbf24');
     }
 
+    // 无图标的条目也要勾选「删除大小图标」——不能只在有图标时才处理
+    syncIconDeleteBoxes(!!it.icon32, !!it.icon128);
     if (it.icon32 || it.icon128) {
-      syncIconDeleteBoxes(!!it.icon32, !!it.icon128);
       setVal(q('#icon-32x-editor'), it.icon32);
       setVal(q('#icon-32x'), it.icon32);
       await sleep(500);
@@ -381,8 +392,8 @@
       }
     }
     await sleep(500);
-    // 填表过程中「同步至大图标」等操作可能重绘并恢复勾选，这里兜底一次
-    if (it.icon32 || it.icon128) syncIconDeleteBoxes(!!it.icon32, !!it.icon128);
+    // 填表过程中「同步至大图标」等操作可能重绘并恢复勾选，这里兜底一次（无图标同样兜底）
+    syncIconDeleteBoxes(!!it.icon32, !!it.icon128);
     await sleep(200);
   }
 
@@ -1573,6 +1584,239 @@
 
 
   // ================= 新增页：队列执行端（退回条目重交，URL 形如 /item/add/31864-809903/） =================
+
+  // ---------- 模组介绍编辑页（/class/edit/<classId>-<subId>/） ----------
+  // 模组页的编辑表单与资料页不同：正文编辑器可能一样，但没有 regname/icon 这些字段，
+  // 所以这里只复用 setEditorHtml + fillEditMeta，其余一律走「导入 JSON → 填入 → 提交」。
+  function initClassEditPanel(classId) {
+    if (document.getElementById('mb-class-edit-panel')) return;
+
+    const st = document.createElement('style');
+    st.id = 'mb-ce-style';
+    st.textContent = [
+      '#mb-class-edit-panel{position:fixed !important;right:18px !important;bottom:24px !important;',
+      'z-index:2147483647 !important;width:430px !important;pointer-events:auto !important;',
+      'background:#ffffff !important;color:#111827 !important;border:2px solid #0f766e !important;',
+      'border-radius:10px !important;box-shadow:0 10px 30px rgba(0,0,0,.35) !important;',
+      'font-size:13.5px !important;font-family:"Microsoft YaHei",sans-serif !important;overflow:hidden !important;}',
+      '#mb-class-edit-panel .mb-hd{padding:9px 12px !important;background:#0f766e !important;',
+      'color:#ffffff !important;font-weight:700 !important;font-size:14px !important;}',
+      '#mb-class-edit-panel .mb-bd{padding:10px 12px !important;background:#ffffff !important;color:#111827 !important;}',
+      '#mb-class-edit-panel #mb-ce-info{color:#111827 !important;font-size:13px !important;line-height:1.5 !important;}',
+      '#mb-class-edit-panel button{margin:3px 6px 3px 0 !important;padding:6px 12px !important;',
+      'border-radius:6px !important;border:1px solid #0f766e !important;background:#0f766e !important;',
+      'color:#ffffff !important;font-size:13px !important;font-weight:600 !important;cursor:pointer !important;}',
+      '#mb-class-edit-panel button:hover{background:#115e59 !important;}',
+      '#mb-class-edit-panel pre{margin:8px 0 0 !important;padding:8px !important;background:#f3f4f6 !important;',
+      'color:#111827 !important;border:1px solid #d1d5db !important;border-radius:6px !important;',
+      'max-height:24vh !important;overflow:auto !important;font-size:12px !important;white-space:pre-wrap !important;}',
+    ].join('');
+    document.head.appendChild(st);
+
+    const panel = document.createElement('div');
+    panel.id = 'mb-class-edit-panel';
+    panel.innerHTML = '<div class="mb-hd">模组介绍 · 批量编辑 v' + MB_VERSION + '</div><div class="mb-bd">' +
+      '<div id="mb-ce-info">载入中…</div>' +
+      '<div style="margin:8px 0">' +
+      '<button id="mb-ce-fill">填入本页</button>' +
+      '<button id="mb-ce-run">填入并提交</button>' +
+      '<button id="mb-ce-auto">连续执行</button>' +
+      '<button id="mb-ce-stop">停止</button>' +
+      '<button id="mb-ce-diag">诊断</button>' +
+      '<button id="mb-ce-import">导入 JSON…</button>' +
+      '<input type="file" id="mb-ce-file" accept=".json" style="display:none">' +
+      '<button id="mb-ce-copy">复制正文</button>' +
+      '</div><pre id="mb-ce-out"></pre></div>';
+    document.body.appendChild(panel);
+    raiseToTopLayer(panel);
+    makeCollapsible(panel, '.mb-hd', '.mb-bd', 'ce');
+
+    const info = (s) => { const e = document.getElementById('mb-ce-info'); if (e) e.textContent = s; };
+    const out = (s) => { const e = document.getElementById('mb-ce-out'); if (e) e.textContent = s; };
+
+    // 整份 JSON 存在一个全局键里，翻页后仍在；当前页按 classId 取对应条目
+    const KEY = 'mcmod-class-edit-plan';
+    let planList = [];
+    let row = null;
+
+    function loadPlanList() {
+      try {
+        const raw = sessionStorage.getItem(KEY);
+        if (raw) {
+          const d = JSON.parse(raw);
+          planList = (d && d.items) || (Array.isArray(d) ? d : []);
+        }
+      } catch (e) { planList = []; }
+      // 也兼容 /class/edit 之外导入的说明：有些流程把条目塞进通用编辑计划
+      if (!planList.length) {
+        const gen = loadEditPlan();
+        if (gen && gen.items && gen.items.length) planList = gen.items;
+      }
+    }
+
+    function pickByClassId() {
+      return planList.find((x) => String(x.classId || x.id || '') === String(classId)) || null;
+    }
+
+    loadPlanList();
+    row = pickByClassId();
+
+    function refresh() {
+      if (!row) {
+        info('当前模组 classId=' + classId + '，队列里没有对应条目（队列共 ' + planList.length +
+             ' 条）。点「导入 JSON…」选再编辑 JSON。');
+        return;
+      }
+      const h1 = (row.html.match(/\[h1=/g) || []).length;
+      const h2 = (row.html.match(/\[h2=/g) || []).length;
+      info('classId=' + classId + ' · ' + (row.name || '') + ' · 正文 ' + row.html.length +
+           ' 字符（h1×' + h1 + '，h2×' + h2 + '）');
+    }
+
+    function pickFromJson(raw) {
+      const list = raw.items || raw;
+      const arr = Array.isArray(list) ? list : [list];
+      const hit = arr.find((x) => String(x.classId || x.id || '') === String(classId)) || arr[0];
+      return hit || null;
+    }
+
+    document.getElementById('mb-ce-import').addEventListener('click', () => {
+      document.getElementById('mb-ce-file').click();
+    });
+
+    document.getElementById('mb-ce-file').addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        try {
+          const raw = JSON.parse(rd.result);
+          const hit = pickFromJson(raw);
+          if (!hit || hit.html === undefined) return info('这份 JSON 里没有 html 字段');
+          const listRaw = raw.items || raw;
+          planList = Array.isArray(listRaw) ? listRaw : [listRaw];
+          sessionStorage.setItem(KEY, JSON.stringify({ items: planList, classId: classId }));
+          row = pickByClassId();
+          if (!row) {
+            row = { classId: Number(classId), name: hit.name || '', html: hit.html,
+                    editRemark: hit.editRemark || '', editNote: hit.editNote || '' };
+          }
+          refresh();
+          out('已载入 ' + planList.length + ' 条，当前页匹配「' + (row.name || classId) +
+              '」，点「填入本页」写入编辑器');
+        } catch (err) {
+          info('导入失败：' + err.message);
+        }
+      };
+      rd.readAsText(f, 'utf-8');
+    });
+
+    function doFill() {
+      if (!row) { info('还没载入正文：先点「导入 JSON…」'); return false; }
+      const path = setEditorHtml(row.html);
+      if (!path) {
+        info('没找到正文编辑器。点「诊断」看页面结构；也可以用「复制正文」手动粘贴。');
+        return false;
+      }
+      const hits = fillEditMeta(row);
+      out('正文已写入（' + path + '）' + (hits.length ? '；' + hits.join('、') : '；附言/说明未命中'));
+      return true;
+    }
+
+    // ---------- 队列状态（autoRun / paused 与 items 同一个键） ----------
+    function curIndex() {
+      return planList.findIndex((x) => String(x.classId || x.id || '') === String(classId));
+    }
+    function loadFlags() {
+      try {
+        const d = JSON.parse(sessionStorage.getItem(KEY) || '{}');
+        return { autoRun: !!d.autoRun, paused: !!d.paused };
+      } catch (e) { return { autoRun: false, paused: false }; }
+    }
+    function saveFlags(patch) {
+      const d = Object.assign({ items: planList }, loadFlags(), patch);
+      sessionStorage.setItem(KEY, JSON.stringify(d));
+    }
+
+    function advance() {
+      const i = curIndex();
+      const next = (i >= 0 && i + 1 < planList.length) ? planList[i + 1] : null;
+      if (!next) {
+        saveFlags({ autoRun: false });
+        info('队列完成，共 ' + planList.length + ' 条');
+        return;
+      }
+      const url = next.targetUrl || ('/class/edit/' + next.classId + '/');
+      info('第 ' + (i + 2) + '/' + planList.length + ' 条：' + (next.name || next.classId) + '，跳转中…');
+      setTimeout(() => { location.href = url; }, 700);
+    }
+
+    async function submitAndNext() {
+      if (!doFill()) { saveFlags({ paused: true }); return; }
+      await sleep(300);
+      info('正在提交…');
+      const btn = findSubmitButton();
+      if (!btn) { saveFlags({ paused: true }); return info('找不到提交按钮，已暂停'); }
+      btn.click();
+      await sleep(2600);
+      const ok = findConfirmAny();
+      if (!ok) { saveFlags({ paused: true }); return info('没等到确认按钮，已暂停（手动点确认后可继续）'); }
+      ok.click();
+      info('已确认「' + (ok.innerText || '').trim().slice(0, 8) + '」，等页面跳转…');
+      await sleep(2800);
+      advance();
+    }
+
+    document.getElementById('mb-ce-fill').addEventListener('click', () => { doFill(); });
+    document.getElementById('mb-ce-run').addEventListener('click', () => { submitAndNext(); });
+
+    document.getElementById('mb-ce-auto').addEventListener('click', () => {
+      if (!row) return info('还没载入正文');
+      saveFlags({ autoRun: true, paused: false });
+      info('连续执行已开启：' + (curIndex() + 1) + '/' + planList.length);
+      submitAndNext();
+    });
+
+    document.getElementById('mb-ce-stop').addEventListener('click', () => {
+      saveFlags({ autoRun: false, paused: true });
+      info('已停止（队列保留，可再点「连续执行」继续）');
+    });
+
+    document.getElementById('mb-ce-diag').addEventListener('click', () => {
+      const cms = document.querySelectorAll('.CodeMirror').length;
+      const ue = !!document.querySelector('#ueditor_0');
+      const taSrc = !!document.querySelector('textarea.edui-sourcearea, .edui-sourcearea textarea, textarea[id*="source"]');
+      const r = findByLabel('改动附言');
+      const n = findByLabel('改动说明');
+      out('CodeMirror: ' + cms + ' 个' +
+          '\nUEditor iframe: ' + (ue ? '有' : '无') +
+          '\n源码 textarea: ' + (taSrc ? '有' : '无') +
+          '\n改动附言字段: ' + (r ? r.how : '未找到') +
+          '\n改动说明字段: ' + (n ? n.how : '未找到') +
+          '\n提交按钮: ' + (findSubmitButton() ? '找到' : '未找到') +
+          '\n页面 URL: ' + location.pathname);
+    });
+
+    document.getElementById('mb-ce-copy').addEventListener('click', async () => {
+      if (!row) return info('还没载入正文');
+      try {
+        await navigator.clipboard.writeText(row.html);
+        info('正文已复制到剪贴板，粘贴到「源代码编辑器」即可');
+      } catch (e) {
+        out(row.html.slice(0, 3000));
+        info('复制失败，正文已显示在下方（最多 3000 字）');
+      }
+    });
+
+    refresh();
+
+    // 连续模式下，进页面 2 秒后自动开填（留点时间让编辑器初始化）
+    const flags = loadFlags();
+    if (flags.autoRun && !flags.paused && row) {
+      info('连续模式：第 ' + (curIndex() + 1) + '/' + planList.length + ' 条，2 秒后自动执行…');
+      setTimeout(() => { submitAndNext(); }, 2000);
+    }
+  }
 
   function initAddQueueRunner(verifyId) {
     if (document.getElementById('mb-addq-panel')) return;

@@ -1,91 +1,109 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""按 Minecraft 的刷怪蛋渲染逻辑生成图标。
+"""刷怪蛋图标渲染：按原版 SpawnEggItem 的两色规则画蛋形。
 
-原版模型 template_spawn_egg.json：
-  parent = item/generated
-  layer0 = item/spawn_egg          （蛋身，tint index 0 = primary color）
-  layer1 = item/spawn_egg_overlay  （斑点，tint index 1 = secondary color）
+原版的刷怪蛋图标由两个可调颜色生成——底色（primaryColor）与斑点色（secondaryColor）。
+这里按同样的构成绘制：
+  1. 蛋形轮廓（上窄下宽的椭圆）
+  2. 底色填满蛋形
+  3. 斑点点缀（固定分布，保证同一模组内的蛋风格一致）
 
-渲染规则：Minecraft 的 item tint 是乘法——纹理灰度值 × 染色值 / 255。
-所以生成 = 两张纹理各乘自己的颜色后叠加，再 NEAREST 放大到 32。
+用法：
+  python render-spawn-egg.py <primary_rgb> <secondary_rgb> <输出路径> [尺寸]
+  rgb 写 "0,51,102" 这种形式
 """
-import base64
-import io
-import json
 import sys
-import urllib.request
-import ssl
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
-BASE = Path(r"E:\Mod\百科-语料\jar-analyze")
-CDN = "https://gcore.jsdelivr.net/gh/misode/mcmeta@1.18.2-assets/assets/minecraft/textures/item/"
+# 蛋形轮廓（在 16×16 网格上的掩码，1=蛋体）
+EGG_MASK = [
+    "................",
+    "................",
+    "......####......",
+    ".....######.....",
+    "....########....",
+    "....########....",
+    "...##########...",
+    "...##########...",
+    "...##########...",
+    "..############..",
+    "..############..",
+    "..############..",
+    "...##########...",
+    "....########....",
+    "................",
+    "................",
+]
+
+# 斑点位置（在蛋形内的相对位置，1=斑点）
+SPOT_MASK = [
+    "................",
+    "................",
+    "................",
+    "......##........",
+    "....##..##......",
+    "..........##....",
+    "....##..........",
+    "........##......",
+    "..##......##....",
+    "....##..........",
+    "..........##....",
+    "..##....##......",
+    "..............#.",
+    "................",
+    "................",
+    "................",
+]
 
 
-def fetch(name: str) -> Image.Image:
-    p = BASE / f"vanilla-{name}"
-    if not p.exists():
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(CDN + name, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=25, context=ctx) as r:
-            p.write_bytes(r.read())
-        print(f"  下载 {name}  {p.stat().st_size} 字节")
-    return Image.open(p).convert("RGBA")
+def parse_rgb(s: str):
+    parts = [int(x) for x in s.split(",")]
+    return tuple(parts[:3])
 
 
-def tint(layer: Image.Image, color: int) -> Image.Image:
-    """按 Minecraft 规则做乘法染色：rgb_out = rgb_tex * rgb_color / 255"""
-    r = (color >> 16) & 0xFF
-    g = (color >> 8) & 0xFF
-    b = color & 0xFF
-    out = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-    for y in range(layer.height):
-        for x in range(layer.width):
-            lr, lg, lb, la = layer.getpixel((x, y))
-            if la == 0:
+def render(primary, secondary, size: int = 32) -> Image.Image:
+    img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    px = img.load()
+    for y in range(16):
+        for x in range(16):
+            if EGG_MASK[y][x] == "#":
+                px[x, y] = (*primary, 255)
+            if SPOT_MASK[y][x] == "#" and EGG_MASK[y][x] == "#":
+                px[x, y] = (*secondary, 255)
+
+    # 描边：蛋体外缘加一圈深色，让轮廓在小尺寸下更清楚
+    edge = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    epx = edge.load()
+    for y in range(16):
+        for x in range(16):
+            if EGG_MASK[y][x] != "#":
                 continue
-            out.putpixel((x, y), (lr * r // 255, lg * g // 255, lb * b // 255, la))
-    return out
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < 16 and 0 <= ny < 16 and EGG_MASK[ny][nx] != "#":
+                    epx[x, y] = (0, 0, 0, 90)
+                    break
+    img = Image.alpha_composite(edge, img)
 
-
-def compose(primary: int, secondary: int, size: int = 32) -> str:
-    base = tint(fetch("spawn_egg.png"), primary)
-    over = tint(fetch("spawn_egg_overlay.png"), secondary)
-    out = Image.alpha_composite(base, over)
-    out = out.resize((size, size), Image.NEAREST)
-    buf = io.BytesIO()
-    out.save(buf, format="PNG", optimize=True)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+    if size != 16:
+        img = img.resize((size, size), Image.NEAREST)
+    return img
 
 
 def main() -> int:
-    # 模组里所有刷怪蛋用同一组颜色：primary=0（黑）、secondary=0xFFFFFF（白）
-    b64 = compose(0, 0xFFFFFF, 32)
-
-    # 预览
-    img = Image.open(io.BytesIO(base64.b64decode(b64)))
-    img.resize((128, 128), Image.NEAREST).save(BASE / "spawn-egg-render-128.png")
-    print(f"生成 {img.size} 图标，预览：{BASE / 'spawn-egg-render-128.png'}")
-    print(f"base64 长度 {len(b64)}")
-
-    # 写回刷怪蛋 JSON
-    p = BASE / "cds-新增刷怪蛋-4397.json"
-    rows = json.loads(p.read_text(encoding="utf-8"))
-    for r in rows:
-        r["icon32"] = b64
-        r["remark"] = ("Crafting Dead: Survival 补齐刷怪蛋资料页：中文名取自 lang/zh_cn.json。"
-                       "图标按 Minecraft 原版刷怪蛋的渲染规则生成（spawn_egg 与 spawn_egg_overlay "
-                       "两层纹理分别乘以模组注册的 primary/secondary 颜色），"
-                       "颜色取自 SurvivalItems 里的 ForgeSpawnEggItem 构造参数。辛苦喵呜机了")
-    p.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"已写回 {len(rows)} 条刷怪蛋")
-
-    # 存一份参考图
-    (BASE / "spawn-egg-icon32.png").write_bytes(base64.b64decode(b64))
+    if len(sys.argv) < 4:
+        print(__doc__)
+        return 1
+    primary = parse_rgb(sys.argv[1])
+    secondary = parse_rgb(sys.argv[2])
+    out = Path(sys.argv[3])
+    size = int(sys.argv[4]) if len(sys.argv) > 4 else 32
+    img = render(primary, secondary, size)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out)
+    print(f"生成 {out}  {img.size}  底色={primary} 斑点={secondary}")
     return 0
 
 
