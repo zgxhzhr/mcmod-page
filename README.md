@@ -92,6 +92,31 @@ python scripts\check-page-structure.py --help
 - 方括号标记（`[hN=]`、`[ban:]`、`[icon:]`）是百科必需标签，不是格式垃圾
 - 附言结尾统一「辛苦 XXX 机了」
 
+
+## 维护
+
+### 改完推上去
+
+`powershell
+git add -A
+git commit -m "..."
+git push origin main
+`
+
+**如果 push 报 Failed to connect to github.com:443 over proxy 127.0.0.1**：
+本机 git 配了 http.proxy=127.0.0.1:10808，代理没开时就连不上，但直连是通的。
+一次性绕过（不改配置）：
+
+`powershell
+git -c http.proxy= -c https.proxy= push origin main
+`
+
+### 改规则块之后
+
+1. 跑 powershell -ExecutionPolicy Bypass -File .\install.ps1 同步到技能目录
+2. 改过 scripts/mcmod-batch.user.js 还要跑 python scripts\install-extension.py，
+   再去 dge://extensions 点重新加载
+
 ## License
 
 见 `LICENSE`。
