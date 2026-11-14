@@ -6,6 +6,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -64,7 +65,7 @@ public final class AgentMain {
         final Map<String, String> cfg = parse(args);
         final long timeoutMs = Long.parseLong(cfg.getOrDefault("timeout", "600")) * 1000L;
         final String mode = cfg.getOrDefault("mode", "lms");
-        final Path gameDir = Path.of(System.getProperty("user.dir"));
+        final Path gameDir = Paths.get(System.getProperty("user.dir"));
         log("premain mode=" + mode + " timeout=" + timeoutMs + "ms cwd=" + gameDir);
 
         Thread t = new Thread(() -> {
@@ -201,7 +202,7 @@ public final class AgentMain {
                         break;
                     case "iconr":
                         commandExport(mc, "exporticons " + System.getProperty("mcauto.modid", "ALL"));
-                        waitForProducts(Path.of(System.getProperty("user.dir"), "IconRendererOutput"),
+                        waitForProducts(Paths.get(System.getProperty("user.dir"), "IconRendererOutput"),
                                 600_000L);
                         break;
                     case "irr":
@@ -471,7 +472,7 @@ public final class AgentMain {
             long sig = 0;
             int files = 0;
             if (Files.isDirectory(dir)) {
-                try (var stream = Files.walk(dir, 4)) {
+                try (java.util.stream.Stream<Path> stream = Files.walk(dir, 4)) {
                     for (Path f : (Iterable<Path>) stream::iterator) {
                         if (Files.isRegularFile(f) && f.toString().endsWith(".json")) {
                             files++;
@@ -527,15 +528,52 @@ public final class AgentMain {
         throw new IllegalStateException("找不到可用的 FileHelper" + (last == null ? "" : "（最后错误: " + last + "）"));
     }
 
+    /**
+     * IRR（Item Render Rebirth）直调导出。
+     *
+     * 它的导出入口不是命令，是 ExportUtils.INSTANCE.exportMods()：
+     *   - 1.12.2 / 1.7.10 都有 public void exportMods()
+     *   - 导出前要先 ItemList.updateList() 把物品列表填好
+     * 产物：当前目录下 export/<modid>_item.json（一次性导出所有模组，按命名空间分文件）
+     */
     private static void irrExport() throws Exception {
-        Class<?> em = findClass("cn.mcmod.item_render.export.ExportMain");
-        if (em == null) {
-            throw new IllegalStateException("找不到 ExportMain，IRR 没装或版本不符");
+        // 先把物品列表刷新出来
+        Class<?> listCls = findClass("itemrender.client.export.ItemList");
+        if (listCls != null) {
+            try {
+                Method upd = listCls.getMethod("updateList");
+                upd.invoke(null);
+                log("ItemList.updateList() 完成");
+            } catch (Throwable e) {
+                log("ItemList.updateList() 失败: " + e);
+            }
+        } else {
+            log("警告：找不到 ItemList");
         }
-        Object inst = staticInvokeNoArg(em);
-        Method m = em.getMethod("DoExport");
-        log("调用 ExportMain#DoExport()");
-        m.invoke(inst);
+
+        Class<?> eu = findClass("itemrender.client.export.ExportUtils");
+        if (eu == null) {
+            throw new IllegalStateException("找不到 ExportUtils，IRR 没装或版本不符");
+        }
+        Object inst = null;
+        try {
+            java.lang.reflect.Field f = eu.getField("INSTANCE");
+            inst = f.get(null);
+        } catch (Throwable ignored) {
+        }
+        if (inst == null) {
+            inst = eu.getConstructor().newInstance();
+            log("ExportUtils.INSTANCE 为空，自己 new 了一个");
+        }
+        Method m = eu.getMethod("exportMods");
+        log("调用 ExportUtils#exportMods()");
+        try {
+            m.invoke(inst);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            // 1.7.10 上它可能抛 IOException 之外的，照记不中断
+            log("exportMods 抛出: " + e.getCause());
+        }
+        log("IRR 导出调用结束");
     }
 
     // ── 鼠标 ──────────────────────────────────────────────────
@@ -727,14 +765,16 @@ public final class AgentMain {
 
     private static void writeDone(Path gameDir) {
         try {
-            Files.writeString(gameDir.resolve("_mcauto_done"), "ok " + System.currentTimeMillis());
+            Files.write(gameDir.resolve("_mcauto_done"),
+                    ("ok " + System.currentTimeMillis()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         } catch (Throwable ignored) {
         }
     }
 
     private static void writeError(Path gameDir, String msg) {
         try {
-            Files.writeString(gameDir.resolve("_mcauto_error.txt"), msg);
+            Files.write(gameDir.resolve("_mcauto_error.txt"),
+                    msg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         } catch (Throwable ignored) {
         }
     }

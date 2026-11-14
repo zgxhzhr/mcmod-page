@@ -21,6 +21,7 @@ HERE = Path(__file__).parent
 SRC = HERE / "agent" / "AgentMain.java"
 OUT_DIR = HERE / "agent-build"
 JAR = HERE / "mcauto-agent.jar"
+JAR8 = HERE / "mcauto-agent8.jar"   # Java 8 版：1.12.2 / 1.7.10 用
 
 JDKS = [
     r"C:\Program Files\Java\jdk-21.0.12",
@@ -75,6 +76,18 @@ def main() -> int:
 
     size = JAR.stat().st_size
     print(f"\n✓ {JAR.name}  {size} bytes")
+
+    # ---- Java 8 版：给 1.12.2 / 1.7.10 用（那些版本的 JVM 只认 class 52）----
+    classes8 = OUT_DIR / "classes8"
+    if classes8.exists():
+        shutil.rmtree(classes8)
+    classes8.mkdir()
+    run([str(jdk / "bin" / "javac.exe"), "-encoding", "UTF-8", "--release", "8",
+         "-d", str(classes8), str(SRC)])
+    if JAR8.exists():
+        JAR8.unlink()
+    run([str(jdk / "bin" / "jar.exe"), "cfm", str(JAR8), str(mf), "-C", str(classes8), "."])
+    print(f"✓ {JAR8.name}  {JAR8.stat().st_size} bytes（Java 8 字节码）")
     return 0
 
 

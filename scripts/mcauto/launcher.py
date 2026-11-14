@@ -105,6 +105,46 @@ def rule_allows(rules) -> bool:
 LIB_CACHE = Path(r"E:\Mod\百科-语料\mcauto-cache\libraries")
 
 
+def extract_natives(vj: dict, libs_dir: Path, natives_dir: Path) -> int:
+    """把老版本（LWJGL 2）的原生库解压到 natives 目录。
+
+    LWJGL 3 会自己从 classpath 里的 natives jar 解压，但 1.7.10 / 1.12.2 用的是
+    LWJGL 2.9.4，必须靠 -Djava.library.path 指向真实的 .dll 目录，
+    否则启动就报 UnsatisfiedLinkError: no lwjgl64 in java.library.path。
+    """
+    import zipfile
+    osname = {"windows": "windows", "linux": "linux", "darwin": "osx"}.get(
+        platform.system().lower(), platform.system().lower())
+    natives_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for lib in vj.get("libraries", []):
+        if not rule_allows(lib.get("rules")):
+            continue
+        nat = lib.get("natives") or {}
+        cls_name = nat.get(osname)
+        if not cls_name:
+            continue
+        cls = ((lib.get("downloads") or {}).get("classifiers") or {}).get(cls_name)
+        if not cls:
+            continue
+        jar = libs_dir / cls["path"]
+        if not jar.exists():
+            jar = LIB_CACHE / cls["path"]
+        if not jar.exists():
+            continue
+        try:
+            with zipfile.ZipFile(jar) as z:
+                for name in z.namelist():
+                    if name.endswith((".dll", ".so", ".dylib")) or name.endswith(".jnilib"):
+                        target = natives_dir / Path(name).name
+                        if not target.exists():
+                            target.write_bytes(z.read(name))
+                            count += 1
+        except Exception:
+            continue
+    return count
+
+
 def ensure_library_files(vj: dict, libs_dir: Path) -> list[str]:
     """按 version json 里的 url 补齐缺失的库文件，返回补下来的路径。
 
@@ -293,6 +333,23 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
         classifier = parts[3] if len(parts) > 3 else ""
         fname = f"{artifact}-{lib_version}" + (f"-{classifier}" if classifier else "") + ".jar"
         p = libs_dir / group.replace(".", "/") / artifact / lib_version / fname
+        if not p.exists():
+            # 名字推导可能不对（Forge 1.12.2 的真实文件是 ...-universal.jar，
+            # 而构造出来的是没有分类器的名字，本机还会残留一个同名 stub）。
+            # 退一步：列目录，优先取带 universal / 带分类器的那个。
+            d = libs_dir / group.replace(".", "/") / artifact / lib_version
+            if d.is_dir():
+                jars = [x for x in d.glob("*.jar") if x.name.startswith(f"{artifact}-{lib_version}")]
+                jars.sort(key=lambda x: ("universal" not in x.name, len(x.name)))
+                if jars:
+                    p = jars[0]
+        # 同一个 artifact 目录里可能同时有 stub 和真实包（Forge 1.12.2 就是），
+        # 优先带 universal 的那个，否则才会出现 tweaker 类找不到 → LaunchWrapper NPE。
+        _dir = libs_dir / group.replace(".", "/") / artifact / lib_version
+        if _dir.is_dir():
+            _univ = [x for x in _dir.glob(f"{artifact}-{lib_version}*universal*.jar")]
+            if _univ:
+                p = _univ[0]
         if p.exists():
             cp.append(str(p))
     # 版本自己的 jar（PCL 生成的扁平版本是完整客户端 jar）
@@ -329,6 +386,13 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
     if dropped:
         print(f"[launcher] classpath 去重：{dropped} 项重复已移除", file=sys.stderr)
 
+    try:
+        _n = extract_natives(vj, libs_dir, natives)
+        if _n:
+            print(f"[launcher] 解压原生库 {_n} 个 → {natives}", file=sys.stderr)
+    except Exception as e:
+        print(f"[launcher] 解压原生库失败: {e}", file=sys.stderr)
+
     sep = ";"
     library_directory = str(libs_dir)
     classpath = sep.join(cp)
@@ -360,6 +424,11 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
             else:
                 jvm.append(expand(val))
 
+    # 老版本（1.7.10 / 1.12.2）的 json 里没有 java.library.path，必须自己指过去，
+    # 否则 LWJGL 2 报 UnsatisfiedLinkError: no lwjgl64 in java.library.path。
+    if not any(a.startswith("-Djava.library.path=") for a in jvm):
+        jvm.append("-Djava.library.path=" + str(natives))
+
     # 内存 + 编码 + 我们的注入
     jvm += [
         "-Xmx3G", "-Xms1G",
@@ -376,6 +445,9 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
     jvm += extra_jvm
 
     # ── game 参数 ──
+    # 1.7.10 / 1.12.2 这类老版本没有 arguments.game，只有一整串 minecraftArguments，
+    # 不处理的话 --tweakClass 之类全丢，LaunchWrapper 直接 NPE。
+    _legacy_args = vj.get("minecraftArguments")
     gsubs = {
         "auth_player_name": username,
         "version_name": version,
@@ -404,6 +476,12 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
         return s
 
     game: list[str] = []
+
+    if _legacy_args:
+
+        # 占位符在下面用 gsubs 展开；先按空格切开
+
+        game = [gexpand(x) for x in _legacy_args.split() if x]
     for a in vj.get("arguments", {}).get("game", []):
         if isinstance(a, str):
             game.append(gexpand(a))
@@ -432,6 +510,11 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
     if "--width" not in game:
         game += ["--width", str(width), "--height", str(height)]
 
+    # 老版本（1.7.10 / 1.12.2）的 version json 里没有 ${classpath} 占位，
+    # classpath 拼好了却没人用，启动报「找不到主类 Launch」。
+    # 这里兜底补一个 -cp，放在主类前面。
+    if "-cp" not in jvm and "-classpath" not in jvm:
+        jvm = jvm + ["-cp", classpath]
     return [java] + jvm + [vj["mainClass"]] + game
 
 

@@ -29,6 +29,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 AGENT = HERE / "mcauto-agent.jar"
+AGENT8 = HERE / "mcauto-agent8.jar"   # Java 8 字节码，1.12.2 / 1.7.10 用
 WORLDS = Path(r"E:\Mod\百科-语料\mcauto-worlds")
 MC_DIR = Path(r"E:\PCL\.minecraft")
 
@@ -70,8 +71,9 @@ def detect_modid(jars: list[Path], tool_modid: str) -> str:
     return ""
 
 
-def _start_local_server(game: Path, version: str, java: str, port: int = 25566,
-                        timeout_s: int = 180) -> subprocess.Popen | None:
+def _start_local_server(game: Path, version: str, java: str, tool_modid: str = "",
+                        port: int = 25566,
+                        timeout_s: int = 240) -> subprocess.Popen | None:
     """起一个本地专用服务端，供 1.20 以下的客户端连入。
 
     为什么需要：--quickPlaySingleplayer 是 1.20 才有的参数。
@@ -108,9 +110,28 @@ def _start_local_server(game: Path, version: str, java: str, port: int = 25566,
         "difficulty=peaceful",
         "gamemode=creative",
     ]) + "\n", encoding="utf-8")
-    # 服务端也要装同一批 mod（客户端模组在服务端加载但不生效，够用）
-    if (game / "mods").is_dir():
-        shutil.copytree(game / "mods", sdir / "mods")
+    # 服务端装同一批 mod，但**跳过工具模组**：LMS / IconRenderer / IRR 都是纯客户端的，
+    # 塞进专用服务端会因找不到客户端类直接崩（1.12.2 / 1.7.10 上尤其明显）。
+    src_mods = game / "mods"
+    if src_mods.is_dir():
+        dst_mods = sdir / "mods"
+        dst_mods.mkdir(parents=True, exist_ok=True)
+        import zipfile as _zf
+        for jar in src_mods.glob("*.jar"):
+            skip = False
+            try:
+                with _zf.ZipFile(jar) as z:
+                    names = z.namelist()
+                    for n in names:
+                        if n.endswith(("mcmod.info", "mods.toml", "fabric.mod.json")):
+                            txt = z.read(n).decode("utf-8", errors="ignore").lower()
+                            if tool_modid and tool_modid.lower() in txt:
+                                skip = True
+                            break
+            except Exception:
+                pass
+            if not skip:
+                shutil.copy2(jar, dst_mods / jar.name)
 
     print(f"      启动本地服务端（端口 {port}）…")
     proc = subprocess.Popen([java, "-Xmx1G", "-jar", str(jar), "--nogui"],
@@ -331,6 +352,17 @@ def _scan_failure(log_path: Path) -> str:
     return ""
 
 
+def agent_jar_for(version: str) -> Path:
+    """1.12.2 及更早的 JVM 只认 class 52（Java 8），必须用 agent8。"""
+    import re
+    m = re.search(r"(\d+)\.(\d+)", version)
+    if m:
+        major, minor = int(m.group(1)), int(m.group(2))
+        if major == 1 and minor <= 12:
+            return AGENT8
+    return AGENT
+
+
 def wait_done(game: Path, proc: subprocess.Popen, timeout_s: int,
               out_dir: Path | None = None, log_path: Path | None = None) -> bool:
     """等 agent 的哨兵文件；同时兜底：产物连续 20 秒不再变化也算完成。
@@ -468,7 +500,10 @@ def main() -> int:
         agent_arg = f"-Dmcauto.modid={target}"
         extra = [f"-Dmcauto.delay={getattr(a, 'delay', 60)}"]
     else:
-        agent_arg = (f"-javaagent:{AGENT}=mode={a.mode},timeout={a.timeout},"
+        chosen_agent = agent_jar_for(a.version)
+        if not chosen_agent.exists():
+            raise SystemExit(f"缺 agent：{chosen_agent}，先跑 build_agent.py")
+        agent_arg = (f"-javaagent:{chosen_agent}=mode={a.mode},timeout={a.timeout},"
                      f"gameDir={game}")
         extra = []
     argv = launcher.build(
@@ -477,7 +512,14 @@ def main() -> int:
         ([f"-Dmcauto.modid={target}"] if target else []), w, h,
         None, None)  # 不覆盖输出目录：工具默认就写在 gameDir 下
     # 把 agent 插到 mainClass 之前（-javaagent 必须在 -jar/-cp 语境里靠前）
-    mi = argv.index(next(x for x in argv if "Launcher" in x or "Main" in x))
+    # 主类必须从 version json 里读，不能靠名字猜：
+    # Forge 1.12.2 的主类是 net.minecraft.launchwrapper.Launch，既没有 Launcher 也没有 Main。
+    _vj, _ = launcher.resolve_version_json(Path(a.mc_dir), a.version)
+    main_class = _vj.get("mainClass", "")
+    try:
+        mi = argv.index(main_class)
+    except ValueError:
+        mi = argv.index(next(x for x in argv if "Launcher" in x or "Main" in x))
     argv = argv[:mi] + [agent_arg] + extra + argv[mi:]
     # 1.20+ 才有 quickPlay：直接进世界，跳过主菜单
     server_proc = None
@@ -485,8 +527,10 @@ def main() -> int:
         argv += ["--quickPlaySingleplayer", "mcauto"]
     else:
         # 1.20 以下没有 quickPlay：起本地服务端，客户端连进去
+        _tool_modid = TOOL_INFO.get(a.mode, {}).get("modid", "")
         server_proc = _start_local_server(game, a.version,
-                                          launcher.find_java(a.version).replace("javaw", "java"))
+                                          launcher.find_java(a.version).replace("javaw", "java"),
+                                          _tool_modid)
         if server_proc is None:
             print("  ⚠ 起不了本地服务端，客户端会停在标题界面")
         else:
