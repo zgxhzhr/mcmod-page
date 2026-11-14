@@ -627,6 +627,9 @@ def main() -> int:
             print("  ⚠ 起不了本地服务端，客户端会停在标题界面")
         else:
             argv += ["--server", "127.0.0.1", "--port", str(server_port)]
+            # self-trigger 模式下由 mod 自己打开连接界面，把真实端口交给它
+            if a.self_trigger:
+                argv[mi:mi] = [f"-Dmcauto.connect=127.0.0.1:{server_port}"]
 
     print(f"[3/4] 启动客户端  pid 待定")
     agent_log = None
