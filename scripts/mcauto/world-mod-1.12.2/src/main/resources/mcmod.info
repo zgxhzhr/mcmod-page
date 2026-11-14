@@ -1,0 +1,14 @@
+[
+  {
+    "modid": "mcautoworld",
+    "name": "mcauto World Loader",
+    "description": "进入世界并触发 IRR 导出（自动化用）",
+    "version": "1.0.0",
+    "mcversion": "1.12.2",
+    "authorList": [
+      "mcauto"
+    ],
+    "clientSideOnly": true,
+    "requiredMods": []
+  }
+]

@@ -1,0 +1,34 @@
+buildscript {
+    repositories {
+        maven { url = 'https://maven.minecraftforge.net' }
+        maven { url = 'https://repo.maven.apache.org/maven2' }
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'net.minecraftforge.gradle:ForgeGradle:2.3-SNAPSHOT'
+    }
+}
+apply plugin: 'net.minecraftforge.gradle.forge'
+
+version = '1.0.0'
+group = 'mcauto'
+archivesBaseName = 'mcauto-world1122'
+
+sourceCompatibility = targetCompatibility = '1.8'
+
+minecraft {
+    version = '1.12.2-14.23.5.2847'
+    runDir = 'run'
+    mappings = 'snapshot_20171003'
+}
+
+dependencies {
+}
+
+processResources {
+    inputs.property 'version', project.version
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
