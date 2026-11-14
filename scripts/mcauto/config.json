@@ -1,0 +1,36 @@
+{
+  "_说明": "本文件是 mcauto 的路径配置。换机器时只需要改这里（或用环境变量 MCAUTO_CONFIG 指向别的 json）。",
+  "_java8警告": "java[8] 必须放在工作区之外：DSH 会把工作区标成 Low 完整性，从里面启动的 exe 写不了 %TEMP%。",
+  "cache": "E:\\Mod\\百科-语料\\mcauto-cache",
+  "worlds": "E:\\Mod\\百科-语料\\mcauto-worlds",
+  "mc_dirs": [
+    "I:\\PCL\\.minecraft",
+    "E:\\PCL\\.minecraft"
+  ],
+  "java": {
+    "8": "C:\\Users\\MKIII\\jdks\\jdk8",
+    "17": "C:\\Program Files\\Java\\jdk-17",
+    "21": "C:\\Program Files\\Java\\jdk-21.0.12",
+    "25": "C:\\Program Files\\Java\\jdk-25"
+  },
+  "gradle": {
+    "8": "E:\\Mod\\其它项目\\mcmod-exporters\\_tools\\gradle-8.9",
+    "7": "E:\\Mod\\其它项目\\mcmod-exporters\\_tools\\gradle-7.6.4",
+    "4": "E:\\Mod\\其它项目\\mcmod-exporters\\_tools\\gradle-4.10.3",
+    "2": "E:\\Mod\\其它项目\\mcmod-exporters\\_tools\\gradle-2.14.1"
+  },
+  "proxy": "http://127.0.0.1:10808",
+  "tool_jars": {
+    "lms_1_21_1": "LetMeSeeSee fork 构建产物（自编）",
+    "irr_1_7_10": "IRR_V1.1.0_MC1.7.10.jar（CurseForge 自取）",
+    "irr_1_12_2": "IRR_V1.1.0_MC1.12.2.jar（CurseForge 自取）",
+    "irr_1_16_x": "IRR-1.0-1.16.X.jar（CurseForge 自取）",
+    "iconr_forge_1_20_1": "IconRenderer-Forge-1.20.1-1.2.0.jar（CurseForge 自取）",
+    "iconr_forge_1_19_2": "IconRenderer-Forge-1.0.2-1.19.2.jar（CurseForge 自取）"
+  },
+  "tool_dirs": [
+    "E:\\Mod\\百科-语料\\mcauto-cache\\mods",
+    "C:\\Users\\MKIII\\Downloads",
+    "E:\\Mod\\其它项目\\mcmod-exporters\\LetMeSeeSee\\build\\libs"
+  ]
+}

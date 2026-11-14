@@ -19,6 +19,12 @@ r"""自动补齐「没声明但硬引用」的依赖，然后重跑。
 """
 from __future__ import annotations
 
+# ── 路径配置：统一从 config.py 读（换机器只改 config.json）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import config as _cfg
+
 import argparse
 import json
 import re
@@ -30,7 +36,7 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
-CACHE = Path(r"E:\Mod\百科-语料\mcauto-cache\mods")
+CACHE = _cfg.mods_cache()
 UA = {"User-Agent": "mcauto/1"}
 
 # 已知「包前缀 → Modrinth/CF slug」。命中就直接下，不用猜。
@@ -252,7 +258,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", required=True)
     ap.add_argument("--mode", required=True)
-    ap.add_argument("--mc-dir", default=r"E:\PCL\.minecraft")
+    ap.add_argument("--mc-dir", default=str(_cfg.mc_dir()))
     ap.add_argument("--target-modid", required=True)
     ap.add_argument("--mods", nargs="+", required=True)
     ap.add_argument("--work", required=True)

@@ -12,6 +12,12 @@ agent 只 import JDK 类（java.lang.reflect / java.nio.file / java.lang.instrum
 """
 from __future__ import annotations
 
+# ── 路径配置：统一从 config.py 读（换机器只改 config.json）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import config as _cfg
+
 import shutil
 import subprocess
 import sys
@@ -23,11 +29,7 @@ OUT_DIR = HERE / "agent-build"
 JAR = HERE / "mcauto-agent.jar"
 JAR8 = HERE / "mcauto-agent8.jar"   # Java 8 版：1.12.2 / 1.7.10 用
 
-JDKS = [
-    r"C:\Program Files\Java\jdk-21.0.12",
-    r"C:\Program Files\Java\jdk-17",
-    r"C:\Program Files\Java\jdk-25",
-]
+JDKS = [str(_cfg.java_home(k)) for k in ("21", "17", "25") if _cfg.java_home(k).exists()]
 
 MANIFEST = """Manifest-Version: 1.0
 Premain-Class: mcauto.AgentMain

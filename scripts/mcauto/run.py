@@ -20,6 +20,12 @@ r"""一条命令跑完：准备隔离环境 → 启动客户端 → agent 自动
 """
 from __future__ import annotations
 
+# ── 路径配置：统一从 config.py 读（换机器只改 config.json）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import config as _cfg
+
 import argparse
 import json
 import shutil
@@ -30,8 +36,8 @@ from pathlib import Path
 HERE = Path(__file__).parent
 AGENT = HERE / "mcauto-agent.jar"
 AGENT8 = HERE / "mcauto-agent8.jar"   # Java 8 字节码，1.12.2 / 1.7.10 用
-WORLDS = Path(r"E:\Mod\百科-语料\mcauto-worlds")
-MC_DIR = Path(r"E:\PCL\.minecraft")
+WORLDS = _cfg.worlds_dir()
+MC_DIR = _cfg.mc_dir()
 
 # 各 mode 对应工具 modId 与输出目录名
 TOOL_INFO = {
@@ -102,7 +108,7 @@ def _start_local_server(game: Path, version: str, java: str, tool_modid: str = "
     if not port:
         port = _free_port()
     mcver = mc_version_of(version)
-    jar = Path(r"E:\Mod\百科-语料\mcauto-cache") / f"server-{mcver}.jar"
+    jar = _cfg.cache_dir() / f"server-{mcver}.jar"
     if not jar.exists():
         print(f"      没有 {jar.name}，先用 make_world.py --version {mcver} 生成本地服务端")
         return None, port
@@ -679,6 +685,18 @@ def main() -> int:
             proc.kill()
         print("  已关闭客户端")
     restore_cursor()
+
+    # 兜底：各工具输出目录名不一样（IconRenderer 写 IconRenderer/Json，
+    # 我们 fork 的自触发入口也写那里）。目录名对不上就直接在 game 下找刚生成的 json，
+    # 否则会误报「没有产物」（踩过）。
+    if not prod_dir.exists() or not any(prod_dir.iterdir()):
+        cands = [p for p in game.rglob("*.json")
+                 if "versions" not in p.parts and "libraries" not in p.parts
+                 and "_server_" not in str(p) and "logs" not in p.parts
+                 and "saves" not in p.parts and "config" not in p.parts]
+        if cands:
+            prod_dir = cands[0].parent
+            print(f"      产物目录按实际输出修正为 {prod_dir}")
 
     files = sorted(prod_dir.glob("*")) if prod_dir.exists() else []
     if files:

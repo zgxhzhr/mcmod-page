@@ -21,6 +21,12 @@ r"""批量导出：一堆模组 jar → 每个模组一个文件夹，里面是*
 """
 from __future__ import annotations
 
+# ── 路径配置：统一从 config.py 读（换机器只改 config.json）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import config as _cfg
+
 import argparse
 import json
 import re

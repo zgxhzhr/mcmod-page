@@ -58,6 +58,19 @@ python scripts\check-page-structure.py --help
 把模组 jar 变成站方能直接吃的 `json + png`。全程无人值守：隔离环境、自动进世界、
 自动触发导出、自动补前置、自动收产物。
 
+### 换一台机器怎么装
+
+先跑能力自检，再按缺口补：
+
+```powershell
+cd scripts\mcauto
+python doctor.py          # 环境 / 启动器 / 工具 jar / 网络 四类逐项报缺什么
+```
+
+路径统一在 `scripts/mcauto/config.json`（或用 `MCAUTO_CONFIG` 指别的文件）。
+完整装配顺序、每层验收命令、以及**我们重编/新增 jar 的清单与构建命令**见
+[docs/BOOTSTRAP.md](docs/BOOTSTRAP.md)。
+
 ### 支持矩阵（全部实测）
 
 | MC / 加载器 | 导出工具 | 进世界方式 | 状态 |

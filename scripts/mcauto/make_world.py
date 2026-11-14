@@ -13,6 +13,12 @@ r"""用官方服务端生成一个超平坦存档，供客户端 quickPlay 加�
 """
 from __future__ import annotations
 
+# ── 路径配置：统一从 config.py 读（换机器只改 config.json）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import config as _cfg
+
 import argparse
 import json
 import re
@@ -22,8 +28,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-CACHE = Path(r"E:\Mod\百科-语料\mcauto-cache")
-WORLDS = Path(r"E:\Mod\百科-语料\mcauto-worlds")
+CACHE = _cfg.cache_dir()
+WORLDS = _cfg.worlds_dir()
 
 
 def download_server(version: str) -> Path:

@@ -21,6 +21,12 @@ libraries / assetIndex），自己解析就能对任意已安装版本生成同�
 """
 from __future__ import annotations
 
+# ── 路径配置：统一从 config.py 读（换机器只改 config.json）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import config as _cfg
+
 import argparse
 import json
 import os
@@ -29,17 +35,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_MC = Path(r"E:\PCL\.minecraft")
+DEFAULT_MC = _cfg.mc_dir()
 # 1.21 系要 Java 21；1.16-1.20 要 Java 17；1.12.2 要 Java 8
-JAVA_CANDIDATES = [
-    # 注意：这个路径必须在**工作区之外**。DSH 把工作区（E:\Mod）标成 Low 完整性，
-    # 从工作区里启动的 exe 会继承 Low IL，连 TEMP 都写不了（Minecraft 的
-    # zipfs 重映射和 ImageIO 都会 AccessDenied）。
-    r"C:\Users\MKIII\jdks\jdk8\bin\javaw.exe",
-    r"C:\Program Files\Java\jdk-21.0.12\bin\javaw.exe",
-    r"C:\Program Files\Java\jdk-17\bin\javaw.exe",
-    r"C:\Program Files\Java\jdk-25\bin\javaw.exe",
-]
+JAVA_CANDIDATES = [x for x in [
+    _cfg.javaw(21), _cfg.javaw(17), _cfg.javaw(25), _cfg.javaw(8),
+] if x]
 
 
 def mcver_of(version: str) -> str:

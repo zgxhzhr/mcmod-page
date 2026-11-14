@@ -18,6 +18,12 @@ r"""按 mods.toml / fabric.mod.json 的依赖声明，自动下载前置模组�
 """
 from __future__ import annotations
 
+# ── 路径配置：统一从 config.py 读（换机器只改 config.json）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import config as _cfg
+
 import argparse
 import json
 import re
@@ -28,7 +34,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-CACHE = Path(r"E:\Mod\百科-语料\mcauto-cache\mods")
+CACHE = _cfg.mods_cache()
 UA = {"User-Agent": "mcauto/1 (mcmod page tooling)"}
 
 # 已知 modId → 下载 slug 的映射（Modrinth/CF 的 slug 常与 modId 不同）
