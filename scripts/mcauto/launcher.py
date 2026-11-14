@@ -96,6 +96,70 @@ def rule_allows(rules) -> bool:
     return allowed
 
 
+LIB_CACHE = Path(r"E:\Mod\百科-语料\mcauto-cache\libraries")
+
+
+def ensure_library_files(vj: dict, libs_dir: Path) -> list[str]:
+    """按 version json 里的 url 补齐缺失的库文件，返回补下来的路径。
+
+    为什么需要：PCL 只下载它装过的版本的库。用 fabric-installer 造出来的版本
+    （或者从没装过的 1.18.2 / 1.16.5）本机根本没有 netty / lwjgl 等文件，
+    直接启动会 ClassNotFoundException: io/netty/...
+
+    下载到我们自己的缓存目录，不往 PCL 的 .mozilla 里写东西。
+    """
+    import urllib.request
+    extra: list[str] = []
+    todo = []
+
+    def want(path_rel: str, url: str | None):
+        if not url:
+            return
+        target = libs_dir / path_rel
+        if target.exists():
+            return
+        cached = LIB_CACHE / path_rel
+        if cached.exists():
+            extra.append(str(cached))
+            return
+        todo.append((path_rel, url, cached))
+
+    for lib in vj.get("libraries", []):
+        if not rule_allows(lib.get("rules")):
+            continue
+        dl = lib.get("downloads") or {}
+        art = dl.get("artifact")
+        if art:
+            want(art["path"], art.get("url"))
+        # 老格式的原生库：natives 里按 OS 指定 classifier
+        nat = lib.get("natives") or {}
+        osname = {"windows": "windows", "linux": "linux", "osx": "osx"}.get(
+            platform.system().lower(), platform.system().lower())
+        cls_name = nat.get(osname)
+        if cls_name:
+            cls = (dl.get("classifiers") or {}).get(cls_name)
+            if cls:
+                want(cls["path"], cls.get("url"))
+
+    if todo:
+        LIB_CACHE.mkdir(parents=True, exist_ok=True)
+        print(f"[launcher] 补下 {len(todo)} 个缺失库文件 …")
+        import time as _t
+        ok = 0
+        for rel, url, cached in todo:
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            for attempt in range(3):
+                try:
+                    urllib.request.urlretrieve(url, cached)
+                    extra.append(str(cached))
+                    ok += 1
+                    break
+                except Exception:
+                    _t.sleep(1)
+        print(f"[launcher] 补齐 {ok}/{len(todo)}")
+    return extra
+
+
 VANILLA_CACHE = Path(r"E:\Mod\百科-语料\mcauto-cache\vanilla")
 
 
@@ -235,6 +299,13 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
 
     # 去重：1.21.1 的 version json 里同一路径会列两次（原版库 + NeoForge 追加库有重叠），
     # 重复项会让 Bootstraplauncher 的 UnionFileSystem 抛 duplicateKeyException，客户端秒退。
+    # 补齐缺失库（PCL 没装过的版本本机没有这些文件）
+    try:
+        for extra_path in ensure_library_files(vj, libs_dir):
+            cp.append(extra_path)
+    except Exception as e:
+        print(f"[launcher] 补库失败: {e}")
+
     seen = set()
     dedup = []
     for x in cp:
