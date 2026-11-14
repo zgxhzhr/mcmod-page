@@ -36,7 +36,7 @@ MC_DIR = Path(r"E:\PCL\.minecraft")
 TOOL_INFO = {
     "lms":   {"modid": "let_me_see_see", "out": "let_me_see_see"},   # -D 覆盖后仍以此为准
     "lmsent": {"modid": "let_me_see_see", "out": "let_me_see_see"},   # fork 版：实体导出
-    "iconr": {"modid": "iconr",          "out": "IconRenderer/Json"},
+    "iconr": {"modid": "iconr",          "out": "IconRendererOutput"},   # Forge 版
     "iconr2": {"modid": "iconr",         "out": "IconRenderer/Json"},  # fork 版：自触发
     "irr":   {"modid": "item_render_rebirth", "out": "export"},
 }
@@ -168,6 +168,25 @@ def hide_window(pid: int) -> bool:
     return False
 
 
+def restore_cursor() -> None:
+    """把系统光标彻底恢复：计数器归零、形状重置、解除裁剪。
+
+    GLFW 被 kill 时不会帮我们恢复光标，所以退出路径必须显式调用，
+    否则用户桌面上的鼠标会「消失」（已踩过两次）。
+    """
+    try:
+        import ctypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.ShowCursor.restype = ctypes.c_int
+        guard = 0
+        while user32.ShowCursor(True) < 0 and guard < 100:
+            guard += 1
+        user32.SetCursor(user32.LoadCursorW(None, ctypes.c_void_p(32512)))  # IDC_ARROW
+        user32.ClipCursor(None)
+    except Exception:
+        pass
+
+
 def start_cursor_watchdog(pid: int, stop_event):
     """持续解除 MC 的鼠标裁剪，并把窗口保持在屏幕外。"""
     import ctypes
@@ -183,6 +202,18 @@ def start_cursor_watchdog(pid: int, stop_event):
             try:
                 # 关键：解除系统光标裁剪
                 user32.ClipCursor(None)
+                # GLFW 每次隐藏都调一次 ShowCursor(FALSE)，内部计数器会被压成负数；
+                # 固定调几次没用，必须循环到返回值 >= 0
+                user32.ShowCursor.restype = ctypes.c_int
+                guard = 0
+                while user32.ShowCursor(True) < 0 and guard < 50:
+                    guard += 1
+                # 把焦点从游戏窗口抢走：MC 只有失焦后才会真正松开鼠标
+                if n % 3 == 0:
+                    try:
+                        user32.SetForegroundWindow(user32.GetShellWindow())
+                    except Exception:
+                        pass
                 # 每 2 秒把窗口挪回屏幕外（MC 可能把窗口拉回）
                 if n % 6 == 0:
                     for h in _window_handles_for_pid(pid):
@@ -197,8 +228,33 @@ def start_cursor_watchdog(pid: int, stop_event):
     th.start()
     return th
 
+FAIL_MARKERS = (
+    "Mod Loading has failed",
+    "Mod loading error has occurred",
+    "A fatal error has been detected",
+    "Exception in thread \"main\"",
+    "Failed to start the game",
+    "Minecraft game provider couldn't locate the game",
+)
+
+
+def _scan_failure(log_path: Path) -> str:
+    """扫启动日志里的致命错误标记，命中就立刻返回原因（免得干等超时）"""
+    try:
+        txt = log_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    tail = txt[-20000:]
+    for m in FAIL_MARKERS:
+        i = tail.find(m)
+        if i >= 0:
+            snippet = tail[i:i + 400].replace("\n", " ")
+            return snippet
+    return ""
+
+
 def wait_done(game: Path, proc: subprocess.Popen, timeout_s: int,
-              out_dir: Path | None = None) -> bool:
+              out_dir: Path | None = None, log_path: Path | None = None) -> bool:
     """等 agent 的哨兵文件；同时兜底：产物连续 20 秒不再变化也算完成。
 
     LMS 的 runExportMcMod 在返回前就把 json 写完了，但 1.21.1 里 1290 个物品的
@@ -210,7 +266,18 @@ def wait_done(game: Path, proc: subprocess.Popen, timeout_s: int,
     t0 = time.time()
     last_sig = None
     stable_since = None
+    last_report = 0.0
     while time.time() < deadline:
+        # 致命错误立刻失败，不要干等
+        if log_path is not None and log_path.exists():
+            why = _scan_failure(log_path)
+            if why:
+                print(f"\n✗ 启动失败（{int(time.time()-t0)}s）：{why[:300]}")
+                return False
+        if time.time() - last_report > 10:
+            last_report = time.time()
+            size = log_path.stat().st_size if (log_path and log_path.exists()) else 0
+            print(f"      … {int(time.time()-t0)}s  日志 {size//1024} KB", flush=True)
         if out_dir is not None:
             # 只认 .json 产物：导出目录里还有 _icons 之类的辅助目录，
             # 把它们算进稳定性判定会导致「刚启动就判完成」并提前杀进程
@@ -361,13 +428,15 @@ def main() -> int:
     print(f"[4/4] 等待导出（最多 {a.timeout}s）")
     # 产物目录：工具默认写在 gameDir 下，按 mode 取
     prod_dir = game / TOOL_INFO[a.mode]["out"]
-    ok = wait_done(game, proc, a.timeout, prod_dir)
+    ok = wait_done(game, proc, a.timeout, prod_dir,
+                  (work / 'agent.log') if a.console else None)
     stop_ev.set()
     # 导出完成后再解析实际产物目录：IconRenderer 是 Json/<modid>/<modid>-items.json，
     # 导出前这个子目录还不存在
     if target and (prod_dir / target).is_dir():
         prod_dir = prod_dir / target
 
+    restore_cursor()
     if not a.keep_open and proc.poll() is None:
         proc.terminate()
         try:
@@ -375,6 +444,7 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             proc.kill()
         print("  已关闭客户端")
+    restore_cursor()
 
     files = sorted(prod_dir.glob("*")) if prod_dir.exists() else []
     if files:

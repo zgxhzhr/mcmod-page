@@ -1,9 +1,9 @@
 package mcauto;
 
-import java.io.File;
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -12,36 +12,58 @@ import java.util.Map;
 /**
  * mcauto agent —— 进世界后自动触发导出，不需要按键、不需要 GUI、不需要作弊。
  *
- * 为什么用 agent 而不是：
- *   - 改 jar      ：要重建工程 / 写 coremod，成本高
- *   - 键盘模拟    ：要窗口焦点，且 GUI 按钮坐标不稳
- *   - 伴侣 mod    ：要 MDK 编译，每个 loader 一套
- * agent 只用 JDK API + 反射，一个 2KB 的 jar，与版本无关。
+ * 跨加载器兼容策略
+ * ----------------
+ * 各加载器运行时的成员名完全不同：
+ *   NeoForge 1.21  mojmap   player / level / sendCommand
+ *   Forge    1.20  SRG      f_91074_ / f_91073_ / m_45729_
+ *   Fabric   1.20  intermediary  field_1724 / field_1687 / method_45729
+ * 硬编码任何一种都会在另两种上失效，所以这里**一律按类型/签名找成员**，不看名字：
+ *   - Minecraft 实例：返回类型是 Minecraft 的无参静态方法
+ *   - level / player / connection：按字段类型（ClientLevel / LocalPlayer / ClientPacketListener，
+ *     含 intermediary 的 class_638 / class_746 / class_634）
+ *   - execute(Runnable)：只有一个 Runnable 参数的方法
+ *   - sendCommand(String)：connection 上只有一个 String 参数的方法（优先名字含 command 的）
  *
  * 用法：
  *   -javaagent:mcauto-agent.jar=mode=lms,timeout=600,gameDir=D:\run
  *
  * mode:
- *   lms   → com.xkball.let_me_see_see...ItemDataExporterScreen#runExportMcMod()   （1.21.1 官方工具）
- *   iconr → 派发客户端命令 exporticons ALL                                       （IconRenderer 1.19-1.20.1）
- *   irr   → cn.mcmod.item_render.export.ExportMain#getInstance()#DoExport()      （IRR 1.16.x）
+ *   lms    → com.xkball...ItemDataExporterScreen#runExportMcMod()   （LMS/NeoForge）
+ *   lmsent → com.xkball...McAutoBridge#exportEntities(modid)        （我们 fork 的 LMS）
+ *   iconr  → 派发命令 exporticons <modid>                            （IconRenderer Forge）
+ *   irr    → com.xkball...ExportMain#DoExport()（IRR 走这条也行）
  *
- * 完成后在 gameDir 写 _mcauto_done（成功）或 _mcauto_error.txt（失败）。
+ * 完成后在 user.dir 写 _mcauto_done（成功）或 _mcauto_error.txt（失败）。
  */
 public final class AgentMain {
 
     private static final long POLL_MS = 500;
     private static Instrumentation INST;
 
+    // 各加载器下同一概念的类型名
+    private static final String[] LEVEL_TYPES = {
+            "net.minecraft.client.multiplayer.ClientLevel",
+            "net.minecraft.class_638",
+    };
+    private static final String[] PLAYER_TYPES = {
+            "net.minecraft.client.player.LocalPlayer",
+            "net.minecraft.client.entity.player.ClientPlayerEntity",
+            "net.minecraft.class_746",
+    };
+    private static final String[] CONNECTION_TYPES = {
+            "net.minecraft.client.multiplayer.ClientPacketListener",
+            "net.minecraft.client.network.ClientPlayNetworkHandler",
+            "net.minecraft.class_634",
+    };
+
     public static void premain(String args, Instrumentation inst) {
         INST = inst;
         final Map<String, String> cfg = parse(args);
         final long timeoutMs = Long.parseLong(cfg.getOrDefault("timeout", "600")) * 1000L;
         final String mode = cfg.getOrDefault("mode", "lms");
-        // 不用 -javaagent 参数里的路径：中文路径经命令行传递后可能被错误解码，
-        // 写哨兵会静默失败。user.dir 是进程工作目录（我们启动时设的 cwd），由系统提供。
         final Path gameDir = Path.of(System.getProperty("user.dir"));
-        log("premain 启动 mode=" + mode + " timeout=" + timeoutMs + "ms gameDir=" + gameDir);
+        log("premain mode=" + mode + " timeout=" + timeoutMs + "ms cwd=" + gameDir);
 
         Thread t = new Thread(() -> {
             try {
@@ -59,29 +81,52 @@ public final class AgentMain {
         long start = System.currentTimeMillis();
         Class<?> mcClass = null;
         log("等待 Minecraft 类加载…");
+
+        // 第一阶段：**零反射**，只看类是否已加载。
+        // 教训：在 Forge 模组加载期对 Minecraft 调 getDeclaredMethods()，会触发事件总线的
+        // 类转换，而它那时还加载不了 org...ScreenEvent，结果抛错并把游戏卡成未响应。
+        // 所以先等「世界类已加载」，说明客户端已经跑起来、Forge 转换器也初始化完了。
         while (System.currentTimeMillis() - start < timeoutMs) {
-            if (mcClass == null) {
-                mcClass = findClass("net.minecraft.client.Minecraft");
+            mcClass = findClassAny("net.minecraft.client.Minecraft",
+                    "net.minecraft.client.MinecraftClient",
+                    "net.minecraft.class_310");
+            boolean worldReady = findClassAny(LEVEL_TYPES) != null;
+            boolean forgeReady = findClass("net.minecraftforge.client.event.ScreenEvent") != null
+                    || findClass("net.minecraftforge.common.MinecraftForge") != null;
+            if (mcClass != null && worldReady && (forgeReady || findClass("net.minecraftforge.eventbus.EventBus") == null)) {
+                break;
             }
-            if (mcClass != null) {
-                Object mc = staticInvoke(mcClass, "getInstance");
+            Thread.sleep(POLL_MS);
+        }
+        if (mcClass == null) {
+            writeError(gameDir, "等不到 Minecraft 类");
+            return;
+        }
+        log("类已就绪，开始反射（探测世界状态）");
+
+        // 第二阶段：反射，失败就重试 —— 加载期早一秒都可能炸
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            {
+                Object mc = null;
+                try {
+                    mc = mcInstance(mcClass);
+                } catch (Throwable e) {
+                    log("反射暂不可用（" + e.getClass().getSimpleName() + "），1 秒后重试");
+                    Thread.sleep(1000);
+                    continue;
+                }
                 if (mc != null) {
-                    Object level = field(mc, "level");
-                    Object player = field(mc, "player");
+                    Object level = fieldByType(mc, LEVEL_TYPES);
+                    Object player = fieldByType(mc, PLAYER_TYPES);
                     if (level != null && player != null) {
-                        log("已进世界，3 秒后开始导出（等资源加载完）");
+                        log("已进世界，3 秒后开始导出");
                         Thread.sleep(3000);
-                        // 先放鼠标：MC 进世界会 GLFW_CURSOR_DISABLED，把系统光标锁在窗口里，
-                        // 无人值守时会让人以为电脑卡死。releaseMouse 之后只要没人点窗口就不会再抓。
-                        // 放后台线程反复放（若阻塞会拖慢导出 60 秒）
-                        final Object mcFinal = mc;
-                        final Class<?> mcClsFinal = mcClass;
-                        Thread rm = new Thread(() -> releaseMouseLoop(mcClsFinal, mcFinal, 120),
-                                "mcauto-release-mouse");
+                        final Object mcF = mc;
+                        Thread rm = new Thread(() -> releaseMouseLoop(mcF), "mcauto-release-mouse");
                         rm.setDaemon(true);
                         rm.start();
                         runExportOnMainThread(mcClass, mc, mode);
-                        releaseMouse(mcClass, mc);
+                        releaseMouse(mc);
                         writeDone(gameDir);
                         log("导出完成，已写 _mcauto_done");
                         return;
@@ -96,24 +141,61 @@ public final class AgentMain {
 
     /** 在主线程（渲染线程）执行导出，否则 FBO 渲染会炸。 */
     private static void runExportOnMainThread(Class<?> mcClass, Object mc, String mode) throws Exception {
-        Method execute = mcClass.getMethod("execute", Runnable.class);
+        // 枚举所有「单 Runnable 参数」的方法，逐个投递，谁真跑了用谁。
+        // 不能只看名字：Forge(SRG) 下 execute 叫 m_18707_，而 m_6681_ 也是单 Runnable 参数，
+        // 但它并不投递任务 —— 之前就错投到它，Runnable 被吞掉，表现为「进世界后没动静」。
+        java.util.List<Method> candidates = new java.util.ArrayList<>();
+        Class<?> k = mc.getClass();
+        while (k != null && k != Object.class) {
+            for (Method m : k.getDeclaredMethods()) {
+                Class<?>[] ps = m.getParameterTypes();
+                if (ps.length == 1 && ps[0] == Runnable.class) {
+                    candidates.add(m);
+                }
+            }
+            k = k.getSuperclass();
+        }
+        log("找到 " + candidates.size() + " 个单 Runnable 参数的方法");
+        for (Method c : candidates) {
+            log("  候选: " + c.getDeclaringClass().getSimpleName() + "#" + c.getName());
+        }
+        if (candidates.isEmpty()) {
+            throw new IllegalStateException("找不到投递任务的方法");
+        }
+
         final Throwable[] err = new Throwable[1];
         final Object lock = new Object();
         final boolean[] done = new boolean[1];
-        execute.invoke(mc, (Runnable) () -> {
+        final boolean[] started = new boolean[1];
+        final boolean[] onRenderThread = new boolean[1];
+        Runnable task = () -> {
+            // 必须确认在渲染线程执行：BlockableEventLoop.submit 之类会在**当前线程**直接跑，
+            // 那样 RenderSystem 会抛 "called from wrong thread"（踩过）
+            String tn = Thread.currentThread().getName();
+            onRenderThread[0] = tn.toLowerCase().contains("render");
+            synchronized (started) {
+                started[0] = true;
+                started.notifyAll();
+            }
+            log("任务开始 mode=" + mode + " 线程=" + tn + (onRenderThread[0] ? " ✓" : " ✗ 非渲染线程"));
             try {
                 switch (mode) {
                     case "lms":
-                        lmsExport();
+                        lmsExport(System.getProperty("mcauto.modid", ""));
+                        break;
+                    case "lmsent":
+                        bridgeCall("com.xkball.let_me_see_see.mcauto.McAutoBridge",
+                                "com.xkball.let_me_see_see.LetMeSeeSee",
+                                System.getProperty("mcauto.modid", ""));
                         break;
                     case "iconr":
-                        commandExport(mcClass, mc, "exporticons ALL");
+                        commandExport(mc, "exporticons " + System.getProperty("mcauto.modid", "ALL"));
+                        // 命令只是「开始导出」，真正写文件是异步的。
+                        // 不等产物就写哨兵的话，run.py 会立刻杀掉客户端，产物永远出不来。
+                        waitForProducts(Path.of(System.getProperty("user.dir"), "IconRendererOutput"), 600_000L);
                         break;
                     case "irr":
                         irrExport();
-                        break;
-                    case "lmsent":
-                        lmsEntityExport(System.getProperty("mcauto.modid", ""));
                         break;
                     default:
                         throw new IllegalArgumentException("未知 mode=" + mode);
@@ -126,11 +208,53 @@ public final class AgentMain {
                     lock.notifyAll();
                 }
             }
-        });
+        };
+
+        // 逐个候选投递，3 秒内没开始执行就换下一个
+        for (Method c : candidates) {
+            try {
+                c.setAccessible(true);
+                c.invoke(mc, task);
+            } catch (Throwable ex) {
+                log("  投递失败 " + c.getName() + ": " + ex);
+                continue;
+            }
+            synchronized (started) {
+                long dl = System.currentTimeMillis() + 3000;
+                while (!started[0] && System.currentTimeMillis() < dl) {
+                    started.wait(200);
+                }
+            }
+            if (started[0] && onRenderThread[0]) {
+                log("  任务在渲染线程执行（投递方法 " + c.getName() + "）");
+                break;
+            }
+            if (started[0] && !onRenderThread[0]) {
+                log("  " + c.getName() + " 在当前线程同步执行，换下一个");
+                // 这一轮的副作用可能已经抛错，清掉错误继续探
+                err[0] = null;
+                synchronized (lock) {
+                    done[0] = false;
+                    started[0] = false;
+                    onRenderThread[0] = false;
+                }
+                continue;
+            }
+            log("  " + c.getName() + " 没有执行任务，换下一个");
+        }
+        if (!started[0] || !onRenderThread[0]) {
+            throw new IllegalStateException("没有候选方法能把任务投递到渲染线程");
+        }
+
         synchronized (lock) {
             long deadline = System.currentTimeMillis() + 600_000L;
+            long lastLog = 0;
             while (!done[0] && System.currentTimeMillis() < deadline) {
                 lock.wait(500);
+                if (!done[0] && System.currentTimeMillis() - lastLog > 10000) {
+                    lastLog = System.currentTimeMillis();
+                    log("等待导出完成…");
+                }
             }
         }
         if (err[0] != null) {
@@ -138,21 +262,218 @@ public final class AgentMain {
         }
     }
 
-    // ── 鼠标释放 ────────────────────────────────────────────────
+    // ── 导出实现 ──────────────────────────────────────────────
+
+    private static void lmsExport(String modid) throws Exception {
+        Class<?> screen = findClass("com.xkball.let_me_see_see.client.gui.screen.ItemDataExporterScreen");
+        if (screen == null) {
+            throw new IllegalStateException("找不到 ItemDataExporterScreen，LMS 没装或版本不符");
+        }
+        Object inst = screen.getDeclaredConstructor().newInstance();
+        if (modid != null && !modid.isEmpty()) {
+            try {
+                screen.getMethod("setNamespaceFilterValue", String.class).invoke(inst, modid);
+                log("已限定命名空间: " + modid);
+            } catch (Throwable e) {
+                log("设置命名空间失败: " + e);
+            }
+        }
+        Method m = screen.getMethod("runExportMcMod");
+        log("调用 runExportMcMod()");
+        m.invoke(inst);
+    }
+
+    private static void bridgeCall(String bridgeName, String anchor, String modid) throws Exception {
+        Class<?> bridge = findOrLoad(bridgeName, anchor);
+        if (bridge == null) {
+            throw new IllegalStateException("找不到 " + bridgeName + " —— 装的不是我们 fork 的版本");
+        }
+        Method m = bridge.getMethod("exportEntities", String.class);
+        log("调用 " + bridge.getSimpleName() + "#exportEntities(" + modid + ")");
+        Object ret = m.invoke(null, modid);
+        log("返回: " + ret);
+    }
+
+    private static void commandExport(Object mc, String cmd) throws Exception {
+        Object player = fieldByType(mc, PLAYER_TYPES);
+        Object connection = fieldByType(player, CONNECTION_TYPES);
+        if (connection == null) {
+            throw new IllegalStateException("找不到 player.connection");
+        }
+
+        // Forge：客户端命令不在 connection 的调度器里（那是服务端同步下来的），
+        // 必须走 net.minecraftforge.client.ClientCommandHandler.runCommand(String)。
+        String bare = cmd.startsWith("/") ? cmd.substring(1) : cmd;
+        Class<?> cch = findClass("net.minecraftforge.client.ClientCommandHandler");
+        if (cch != null) {
+            try {
+                Method run = null;
+                for (Method m : cch.getMethods()) {
+                    if (m.getName().equals("runCommand") && m.getParameterCount() == 1
+                            && m.getParameterTypes()[0] == String.class) {
+                        run = m;
+                        break;
+                    }
+                }
+                if (run != null) {
+                    log("ClientCommandHandler.runCommand(" + bare + ")");
+                    Object r = run.invoke(null, bare);
+                    log("  返回: " + r);
+                    if (Boolean.TRUE.equals(r)) {
+                        return;
+                    }
+                }
+            } catch (Throwable e) {
+                log("  ClientCommandHandler 调用失败: " + e);
+            }
+        }
+
+        // 优先走 Brigadier 调度器：connection.getCommands() 返回 CommandDispatcher，
+        // player.createCommandSourceStack() 给出 source，然后 dispatcher.execute(cmd, source)。
+        // 这样不依赖 sendCommand/sendChat 这种一改映射就变的方法名 ——
+        // 之前按「参数是 String」猜方法，猜到了 sendChat，命令被当聊天发出去。
+        Object dispatcher = methodReturningType(connection,
+                "com.mojang.brigadier.CommandDispatcher");
+        Object source = methodReturningType(player,
+                "net.minecraft.commands.CommandSourceStack");
+        if (dispatcher != null && source != null) {
+            for (Method m : dispatcher.getClass().getMethods()) {
+                if (!m.getName().equals("execute") || m.getParameterCount() != 2) {
+                    continue;
+                }
+                Class<?>[] ps = m.getParameterTypes();
+                if (ps[0] != String.class) {
+                    continue;
+                }
+                if (!ps[1].isInstance(source)) {
+                    continue;
+                }
+                log("用调度器执行 /" + bare);
+                m.invoke(dispatcher, bare, source);
+                return;
+            }
+            log("调度器 execute(String, source) 没找到，退回 sendCommand");
+        } else {
+            log("拿不到 CommandDispatcher 或 CommandSourceStack，退回 sendCommand");
+        }
+
+        // 兜底：优先名字里带 command 的（mojmap/intermediary 都是 sendCommand）
+        Method send = null;
+        for (Method m : connection.getClass().getMethods()) {
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps.length == 1 && ps[0] == String.class
+                    && m.getName().toLowerCase().contains("command")) {
+                send = m;
+                break;
+            }
+        }
+        if (send == null) {
+            throw new IllegalStateException("找不到可用的命令发送方法");
+        }
+        send.setAccessible(true);
+        log("派发命令 /" + cmd + "（方法 " + send.getName() + "）");
+        send.invoke(connection, cmd.startsWith("/") ? cmd.substring(1) : cmd);
+    }
+
+    /** 找无参、返回类型为指定类（或其子类）的方法，用来拿 dispatcher / source */
+    private static Object methodReturningType(Object obj, String returnTypeName) {
+        Class<?> k = obj.getClass();
+        while (k != null && k != Object.class) {
+            for (Method m : k.getDeclaredMethods()) {
+                if (m.getParameterCount() != 0) {
+                    continue;
+                }
+                Class<?> rt = m.getReturnType();
+                if (!rt.getName().equals(returnTypeName) && !returnTypeName.equals(rt.getName())) {
+                    // 允许返回子类
+                    boolean assignable = false;
+                    for (Class<?> sup = rt; sup != null; sup = sup.getSuperclass()) {
+                        if (sup.getName().equals(returnTypeName)) {
+                            assignable = true;
+                            break;
+                        }
+                    }
+                    if (!assignable) {
+                        continue;
+                    }
+                }
+                try {
+                    m.setAccessible(true);
+                    Object v = m.invoke(obj);
+                    if (v != null) {
+                        return v;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            k = k.getSuperclass();
+        }
+        return null;
+    }
 
     /**
-     * 调 Minecraft.mouseHandler.releaseMouse()。
-     * MC 进世界时用 GLFW_CURSOR_DISABLED 抓鼠标，系统光标被锁在窗口内，
-     * 无人值守时用户会以为机器卡死。releaseMouse 把光标还回系统。
+     * 等目录里出现 json 产物并稳定 5 秒。
+     * 命令式触发（Forge 的 /exporticons）是异步导出，必须等落盘。
      */
-    private static void releaseMouse(Class<?> mcClass, Object mc) {
+    private static void waitForProducts(Path dir, long timeoutMs) {
+        long start = System.currentTimeMillis();
+        long lastSig = -1;
+        long lastChange = start;
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            long sig = 0;
+            int files = 0;
+            if (Files.isDirectory(dir)) {
+                try (var stream = Files.walk(dir, 4)) {
+                    for (Path f : (Iterable<Path>) stream::iterator) {
+                        if (Files.isRegularFile(f) && f.toString().endsWith(".json")) {
+                            files++;
+                            sig += Files.size(f) + f.getFileName().toString().hashCode();
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            if (files > 0) {
+                if (sig != lastSig) {
+                    lastSig = sig;
+                    lastChange = System.currentTimeMillis();
+                    log("产物写入中… " + files + " 个 json");
+                } else if (System.currentTimeMillis() - lastChange > 5000) {
+                    log("产物稳定（" + files + " 个 json）");
+                    return;
+                }
+            }
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                return;
+            }
+        }
+        log("等产物超时");
+    }
+
+    private static void irrExport() throws Exception {
+        Class<?> em = findClass("cn.mcmod.item_render.export.ExportMain");
+        if (em == null) {
+            throw new IllegalStateException("找不到 ExportMain，IRR 没装或版本不符");
+        }
+        Object inst = staticInvokeNoArg(em);
+        Method m = em.getMethod("DoExport");
+        log("调用 ExportMain#DoExport()");
+        m.invoke(inst);
+    }
+
+    // ── 鼠标 ──────────────────────────────────────────────────
+
+    private static void releaseMouse(Object mc) {
         try {
-            Object mh = field(mc, "mouseHandler");
+            Object mh = fieldByType(mc, new String[]{
+                    "net.minecraft.client.MouseHandler", "net.minecraft.class_312"});
             if (mh == null) {
                 return;
             }
             for (Method m : mh.getClass().getMethods()) {
-                if (m.getName().equals("releaseMouse") || m.getName().equals("func_198029_a")) {
+                if (m.getParameterCount() == 0 && m.getName().toLowerCase().contains("release")) {
                     m.invoke(mh);
                     return;
                 }
@@ -161,10 +482,9 @@ public final class AgentMain {
         }
     }
 
-    /** 连续放 N 秒（MC 在窗口获得焦点时可能再次抓取）。 */
-    private static void releaseMouseLoop(Class<?> mcClass, Object mc, int seconds) {
-        for (int i = 0; i < seconds; i++) {
-            releaseMouse(mcClass, mc);
+    private static void releaseMouseLoop(Object mc) {
+        for (int i = 0; i < 240; i++) {
+            releaseMouse(mc);
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {
@@ -173,90 +493,8 @@ public final class AgentMain {
         }
     }
 
-    // ── 三种导出实现 ─────────────────────────────────────────────
+    // ── 反射工具：按类型/签名找，不按名字 ────────────────────────
 
-    /** LMS（mcmod 官方）：new ItemDataExporterScreen().runExportMcMod() */
-    private static void lmsExport() throws Exception {
-        lmsExport(System.getProperty("mcauto.modid", ""));
-    }
-
-    private static void lmsExport(String modid) throws Exception {
-        Class<?> screen = findClass("com.xkball.let_me_see_see.client.gui.screen.ItemDataExporterScreen");
-        if (screen == null) {
-            throw new IllegalStateException("找不到 ItemDataExporterScreen，LMS 没装或版本不符");
-        }
-        Object inst = screen.getDeclaredConstructor().newInstance();
-        // 只导目标模组：runExportMcMod 里 filterItem(itemID) 读 namespaceFilterValue，
-        // 不设就等于导全部命名空间（含 1290 个原版物品，编码 PNG 极慢）
-        if (modid != null && !modid.isEmpty()) {
-            try {
-                screen.getMethod("setNamespaceFilterValue", String.class).invoke(inst, modid);
-                log("已限定命名空间: " + modid);
-            } catch (Throwable e) {
-                log("设置命名空间失败（将导出全部）: " + e);
-            }
-        } else {
-            log("未指定 modid，导出全部命名空间（慢）");
-        }
-        Method m = screen.getMethod("runExportMcMod");
-        log("调用 " + screen.getSimpleName() + "#runExportMcMod()");
-        m.invoke(inst);
-        log("导出方法返回");
-    }
-
-    /** IconRenderer：客户端命令 exporticons ALL */
-    private static void commandExport(Class<?> mcClass, Object mc, String cmd) throws Exception {
-        Object player = field(mc, "player");
-        Object connection = field(player, "connection");
-        // 1.20+ ClientPacketListener.sendCommand
-        Method send = null;
-        for (Method m : connection.getClass().getMethods()) {
-            if (m.getName().equals("sendCommand") || m.getName().equals("sendUnsignedCommand")) {
-                send = m;
-                break;
-            }
-        }
-        if (send == null) {
-            throw new IllegalStateException("找不到 sendCommand");
-        }
-        log("派发命令 /" + cmd);
-        send.invoke(connection, cmd);
-    }
-
-    /**
-     * 我们 fork 过的 LMS：直接调 McAutoBridge.exportEntities(modid)。
-     * 原版 LMS 没有实体导出，这是 fork 里新增的类。
-     */
-    private static void lmsEntityExport(String modid) throws Exception {
-        Class<?> bridge = findOrLoad("com.xkball.let_me_see_see.mcauto.McAutoBridge",
-                "com.xkball.let_me_see_see.LetMeSeeSee");
-        if (bridge == null) {
-            throw new IllegalStateException("找不到 McAutoBridge —— 装的不是我们 fork 的 LMS");
-        }
-        Method m = bridge.getMethod("exportEntities", String.class);
-        log("调用 McAutoBridge#exportEntities(" + modid + ")");
-        Object ret = m.invoke(null, modid);
-        log("实体导出返回: " + ret);
-    }
-
-    /** IRR 1.16.x：ExportMain.getInstance().DoExport() */    private static void irrExport() throws Exception {
-        Class<?> em = findClass("cn.mcmod.item_render.export.ExportMain");
-        if (em == null) {
-            throw new IllegalStateException("找不到 ExportMain，IRR 没装或版本不符");
-        }
-        Object inst = staticInvoke(em, "getInstance");
-        Method m = em.getMethod("DoExport");
-        log("调用 ExportMain#DoExport()");
-        m.invoke(inst);
-    }
-
-    // ── 反射工具 ────────────────────────────────────────────────
-
-    /**
-     * 通过 Instrumentation 找已加载的类。
-     * 不能用 Class.forName：MC / mod 类由 TransformationServices 的类加载器加载，
-     * agent 自己所在的系统加载器看不到它们。
-     */
     private static Class<?> findClass(String name) {
         for (Class<?> c : INST.getAllLoadedClasses()) {
             if (c.getName().equals(name)) {
@@ -266,12 +504,16 @@ public final class AgentMain {
         return null;
     }
 
-    /**
-     * 找类；如果还没被加载过，就用 anchor 类（同 mod 里必然已加载的一个）的类加载器去加载。
-     *
-     * 为什么需要：getAllLoadedClasses 只包含**已加载**的类。我们 fork 加的 McAutoBridge
-     * 没有任何其他代码引用它，所以永远不会被自动加载 —— 只扫已加载类会报「找不到」。
-     */
+    private static Class<?> findClassAny(String... names) {
+        for (String n : names) {
+            Class<?> c = findClass(n);
+            if (c != null) {
+                return c;
+            }
+        }
+        return null;
+    }
+
     private static Class<?> findOrLoad(String name, String anchor) {
         Class<?> c = findClass(name);
         if (c != null) {
@@ -282,38 +524,100 @@ public final class AgentMain {
             try {
                 return Class.forName(name, false, a.getClassLoader());
             } catch (Throwable e) {
-                log("用 " + anchor + " 的加载器加载 " + name + " 失败: " + e);
+                log("加载 " + name + " 失败: " + e);
             }
         }
         return null;
     }
 
-    private static Object staticInvoke(Class<?> c, String name) {
-        try {
-            Method m = c.getMethod(name);
-            return m.invoke(null);
-        } catch (Throwable e) {
+    /** 返回类型是 mcClass 的无参静态方法 = getInstance() */
+    private static Object mcInstance(Class<?> mcClass) {
+        for (Method m : mcClass.getDeclaredMethods()) {
+            if (!Modifier.isStatic(m.getModifiers()) || m.getParameterCount() != 0) {
+                continue;
+            }
+            if (m.getReturnType() != mcClass) {
+                continue;
+            }
+            try {
+                m.setAccessible(true);
+                return m.invoke(null);
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    /** 按字段类型名匹配（支持继承链），不看字段名 */
+    private static Object fieldByType(Object obj, String[] typeNames) {
+        if (obj == null) {
             return null;
         }
+        Class<?> c = obj.getClass();
+        while (c != null && c != Object.class) {
+            for (Field f : c.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers())) {
+                    continue;
+                }
+                String tn = f.getType().getName();
+                for (String want : typeNames) {
+                    if (tn.equals(want)) {
+                        try {
+                            f.setAccessible(true);
+                            Object v = f.get(obj);
+                            if (v != null) {
+                                return v;
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            }
+            c = c.getSuperclass();
+        }
+        return null;
     }
 
-    private static Object field(Object obj, String name) {
-        Class<?> c = obj.getClass();
-        while (c != null) {
-            try {
-                Field f = c.getDeclaredField(name);
-                f.setAccessible(true);
-                return f.get(obj);
-            } catch (NoSuchFieldException e) {
-                c = c.getSuperclass();
-            } catch (Throwable e) {
-                return null;
+    /** 唯一参数为该类型的方法 */
+    private static Method methodWithParams(Class<?> c, Class<?>... params) {
+        Class<?> k = c;
+        while (k != null && k != Object.class) {
+            for (Method m : k.getDeclaredMethods()) {
+                Class<?>[] ps = m.getParameterTypes();
+                if (ps.length != params.length) {
+                    continue;
+                }
+                boolean okAll = true;
+                for (int i = 0; i < ps.length; i++) {
+                    if (ps[i] != params[i]) {
+                        okAll = false;
+                        break;
+                    }
+                }
+                if (okAll) {
+                    return m;
+                }
+            }
+            k = k.getSuperclass();
+        }
+        return null;
+    }
+
+    private static Object staticInvokeNoArg(Class<?> c) {
+        for (Method m : c.getDeclaredMethods()) {
+            if (Modifier.isStatic(m.getModifiers()) && m.getParameterCount() == 0
+                    && m.getReturnType() == c) {
+                try {
+                    m.setAccessible(true);
+                    return m.invoke(null);
+                } catch (Throwable ignored) {
+                }
             }
         }
         return null;
     }
 
-    // ── 状态文件与小工具 ─────────────────────────────────────────
+    // ── 状态文件 ─────────────────────────────────────────────
 
     private static Map<String, String> parse(String args) {
         Map<String, String> m = new HashMap<>();
@@ -331,8 +635,7 @@ public final class AgentMain {
 
     private static void writeDone(Path gameDir) {
         try {
-            Files.writeString(gameDir.resolve("_mcauto_done"),
-                    "ok " + System.currentTimeMillis());
+            Files.writeString(gameDir.resolve("_mcauto_done"), "ok " + System.currentTimeMillis());
         } catch (Throwable ignored) {
         }
     }
