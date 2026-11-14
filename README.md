@@ -60,8 +60,8 @@ python scripts\check-page-structure.py --help
 
 ### 不想用任何工具？看这份
 
-[docs/MANUAL-RULES.md](docs/MANUAL-RULES.md) —— **无工具版**的完整规则：
-只用浏览器 + 百科自带编辑器，从零手写能过审的页面。
+[docs/MANUAL-RULES.md](docs/MANUAL-RULES.md) —— **最少工具版**的完整规则：
+不用我们的流水线，只用浏览器 + 篡改猴里的 Mcmodder 脚本，从零手写能过审的页面。
 包含粘贴清样式、语法对照、模组页/资料页结构、图标规范、去 AI 味、提交前自检清单、常见退回原因。
 
 ### 换一台机器怎么装
