@@ -38,6 +38,8 @@ import java.util.Map;
  */
 public final class AgentMain {
 
+    private static Class<?> mcClass;
+
     private static final long POLL_MS = 500;
     private static Instrumentation INST;
 
@@ -98,6 +100,7 @@ public final class AgentMain {
             }
             Thread.sleep(POLL_MS);
         }
+        AgentMain.mcClass = mcClass;
         if (mcClass == null) {
             writeError(gameDir, "等不到 Minecraft 类");
             return;
@@ -190,6 +193,12 @@ public final class AgentMain {
                                 "com.xkball.let_me_see_see.LetMeSeeSee",
                                 System.getProperty("mcauto.modid", ""));
                         break;
+                    case "iconrd":
+                        // 直接反射调工具自己的导出类，不走命令通道。
+                        // Forge 各版本客户端命令入口不一样（1.18.2 没有 getSource），
+                        // 而 FileHelper(modid) 构造完就写完了文件，最稳。
+                        directExport(System.getProperty("mcauto.modid", ""));
+                        break;
                     case "iconr":
                         commandExport(mc, "exporticons " + System.getProperty("mcauto.modid", "ALL"));
                         waitForProducts(Path.of(System.getProperty("user.dir"), "IconRendererOutput"),
@@ -267,6 +276,16 @@ public final class AgentMain {
         // 必须走 net.minecraftforge.client.ClientCommandHandler.runCommand(String)。
         String bare = cmd.startsWith("/") ? cmd.substring(1) : cmd;
         Class<?> cch = findClass("net.minecraftforge.client.ClientCommandHandler");
+        if (cch == null) {
+            log("拿不到 ClientCommandHandler，列出 connection 上的单 String 方法：");
+            for (Method m : connection.getClass().getMethods()) {
+                Class<?>[] ps = m.getParameterTypes();
+                if (ps.length == 1 && ps[0] == String.class) {
+                    log("   " + m.getDeclaringClass().getSimpleName() + "#" + m.getName()
+                            + " -> " + m.getReturnType().getSimpleName());
+                }
+            }
+        }
         if (cch != null) {
             try {
                 Method run = null;
@@ -277,7 +296,74 @@ public final class AgentMain {
                         break;
                     }
                 }
-                if (run != null) {
+                if (run == null) {
+                    log("  ClientCommandHandler 里没有单 String 的 runCommand，列出方法：");
+                    for (Method m : cch.getMethods()) {
+                        if (m.getName().toLowerCase().contains("command")
+                                || m.getName().toLowerCase().contains("dispatch")) {
+                            StringBuilder sb = new StringBuilder("     " + m.getName() + "(");
+                            for (Class<?> pt : m.getParameterTypes()) {
+                                sb.append(pt.getSimpleName()).append(",");
+                            }
+                            sb.append(") -> ").append(m.getReturnType().getSimpleName());
+                            log(sb.toString());
+                        }
+                    }
+                    // 换条路：拿客户端调度器自己执行
+                    try {
+                        Object cdisp = methodReturningType(cch, "com.mojang.brigadier.CommandDispatcher");
+                        // 1.18.2 没有 getSource()，自己 new 一个 ClientCommandSourceStack；
+                        // 1.19+ 有 getSource()。两条都试。
+                        Method gsrc = null;
+                        for (Method m : cch.getMethods()) {
+                            if (m.getParameterCount() == 0 && m.getName().toLowerCase().contains("source")) {
+                                gsrc = m;
+                                break;
+                            }
+                        }
+                        Object csrc = null;
+                        if (gsrc != null) {
+                            csrc = gsrc.invoke(null);
+                        } else {
+                            Class<?> srcCls = findClass("net.minecraftforge.client.ClientCommandSourceStack");
+                            if (srcCls != null) {
+                                for (java.lang.reflect.Constructor<?> ctor : srcCls.getConstructors()) {
+                                    Class<?>[] ps = ctor.getParameterTypes();
+                                    try {
+                                        if (ps.length == 0) {
+                                            csrc = ctor.newInstance();
+                                        } else if (ps.length == 1 && ps[0].isInstance(mc)) {
+                                            csrc = ctor.newInstance(mc);
+                                        }
+                                        if (csrc != null) {
+                                            log("  自己构造了 source: " + ctor);
+                                            break;
+                                        }
+                                    } catch (Throwable ignored) {
+                                    }
+                                }
+                            }
+                        }
+                        if (cdisp != null && csrc != null) {
+                            log("  改用客户端调度器执行（source=" + (csrc == null ? "null" : csrc.getClass().getSimpleName()) + "）");
+                            for (Method m : cdisp.getClass().getMethods()) {
+                                if (!m.getName().equals("execute") || m.getParameterCount() != 2
+                                        || m.getParameterTypes()[0] != String.class) {
+                                    continue;
+                                }
+                                if (csrc == null || m.getParameterTypes()[1].isInstance(csrc)) {
+                                    m.invoke(cdisp, bare, csrc);
+                                    log("  客户端调度器已执行");
+                                    return;
+                                }
+                            }
+                        } else {
+                            log("  拿不到客户端调度器或 source");
+                        }
+                    } catch (Throwable e2) {
+                        log("  客户端调度器执行失败: " + e2);
+                    }
+                } else {
                     log("ClientCommandHandler.runCommand(" + bare + ")");
                     Object r = run.invoke(null, bare);
                     log("  返回: " + r);
@@ -414,6 +500,33 @@ public final class AgentMain {
         log("等产物超时");
     }
 
+    /**
+     * 直接构造工具的导出类（Forge/Fabric 的包名不同，两个都试）。
+     * FileHelper(String modId) 构造函数里就完成 收集 → 渲染 → 写文件 的全流程。
+     */
+    private static void directExport(String modid) throws Exception {
+        String[] classes = {
+                "top.gregtao.iconrenderer.utils.FileHelper",   // Forge 移植版
+                "top.gregtao.iconr.utils.FileHelper",          // 上游 Fabric 版
+        };
+        Throwable last = null;
+        for (String name : classes) {
+            Class<?> cls = findClass(name);
+            if (cls == null) {
+                continue;
+            }
+            try {
+                Object inst = cls.getConstructor(String.class).newInstance(modid);
+                log("直接导出完成：" + name + " 实例=" + (inst != null));
+                return;
+            } catch (Throwable e) {
+                last = e;
+                log("  " + name + " 导出失败: " + e);
+            }
+        }
+        throw new IllegalStateException("找不到可用的 FileHelper" + (last == null ? "" : "（最后错误: " + last + "）"));
+    }
+
     private static void irrExport() throws Exception {
         Class<?> em = findClass("cn.mcmod.item_render.export.ExportMain");
         if (em == null) {
@@ -461,6 +574,23 @@ public final class AgentMain {
         for (Class<?> c : INST.getAllLoadedClasses()) {
             if (c.getName().equals(name)) {
                 return c;
+            }
+        }
+        // 没加载过就主动加载：Forge 的 ClientCommandHandler 是懒加载的，
+        // 只查已加载类会永远拿不到（1.18.2 上踩过）。
+        ClassLoader[] loaders = {
+                Thread.currentThread().getContextClassLoader(),
+                ClassLoader.getSystemClassLoader(),
+                AgentMain.class.getClassLoader(),
+                mcClass == null ? null : mcClass.getClassLoader(),
+        };
+        for (ClassLoader cl : loaders) {
+            if (cl == null) {
+                continue;
+            }
+            try {
+                return Class.forName(name, false, cl);
+            } catch (Throwable ignored) {
             }
         }
         return null;

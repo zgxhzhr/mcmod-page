@@ -36,6 +36,7 @@ MC_DIR = Path(r"E:\PCL\.minecraft")
 TOOL_INFO = {
     "lms":   {"modid": "let_me_see_see", "out": "let_me_see_see"},   # -D 覆盖后仍以此为准
     "lmsent": {"modid": "let_me_see_see", "out": "let_me_see_see"},   # fork 版：实体导出
+    "iconrd": {"modid": "iconr",         "out": "IconRendererOutput"},   # Forge：直接调 FileHelper
     "iconr": {"modid": "iconr",          "out": "IconRendererOutput"},   # Forge 版
     "iconr2": {"modid": "iconr",         "out": "IconRenderer/Json"},  # fork 版：自触发
     "irr":   {"modid": "item_render_rebirth", "out": "export"},

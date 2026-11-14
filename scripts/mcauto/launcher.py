@@ -297,10 +297,14 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
             cp.append(str(p))
     # 版本自己的 jar（PCL 生成的扁平版本是完整客户端 jar）
     vjar = vdir / f"{version}.jar"
+    # Forge/NeoForge 用模块路径自己提供 minecraft 模块（-p 里带目标 jar）。
+    # 此时**不能**再把原版 jar 塞进 classpath：会出现两个模块都导出
+    # net.minecraft.server，直接 java.lang.module.ResolutionException。
+    has_module_path = any(a in ("-p", "--module-path") for a in vj.get("arguments", {}).get("jvm", [])
+                          if isinstance(a, str))
     if vjar.exists():
         cp.append(str(vjar))
-    elif vanilla_jar is not None:
-        # inheritsFrom 场景：原版客户端 jar 在父版本目录或我们的缓存里
+    elif vanilla_jar is not None and not has_module_path:
         cp.append(str(vanilla_jar))
 
     # 去重：1.21.1 的 version json 里同一路径会列两次（原版库 + NeoForge 追加库有重叠），
