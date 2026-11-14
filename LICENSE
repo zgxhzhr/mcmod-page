@@ -19,3 +19,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+---------------------------------------------------------------------------
+边界说明 / Scope
+
+本许可仅覆盖本仓库作者原创的代码与文档。
+
+不包括：
+  · examples/ 中出现的模组名称、物品名称、图标、贴图等第三方内容，
+    其版权归对应模组作者，不在本许可授权范围内；
+  · 本仓库依赖但未包含的第三方组件（LetMeSeeSee / IconRenderer /
+    IRR / Minecraft / Forge / Fabric 等），各自适用上游许可。
+
+本仓库配套发布的两个 fork（LetMeSeeSee 为 LGPL-3.0，IconRenderer 为 GPL-3.0）
+发布了对应二进制的改造版，它们的源码与许可各自留在 fork 仓库中。
+详见 THIRD-PARTY.md。

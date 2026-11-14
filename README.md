@@ -263,4 +263,12 @@ git -c http.proxy= -c https.proxy= push origin main
 
 ## License
 
-见 `LICENSE`。两个 fork 各自沿用上游许可（LGPLv3 / GPL-3.0）。
+- **本仓库（代码 + 文档）：MIT**，全文见 [LICENSE](LICENSE)
+- **两个 fork 沿用上游许可**：LetMeSeeSee = **LGPL-3.0**，IconRenderer = **GPL-3.0**
+- **GPL/LGPL 二进制只发在各自 fork 的 release 里**，不在本仓库：
+  - [LetMeSeeSee · mcauto-1.0.8](https://github.com/zgxhzhr/LetMeSeeSee/releases/tag/mcauto-1.0.8)
+  - [IconRenderer · fabric-all-mcauto](https://github.com/zgxhzhr/IconRenderer/releases/tag/fabric-all-mcauto)
+- 本仓库 release 只放 MIT 产物：流水线包 + 三个 world mod
+- `examples/` 中的模组名/图标版权属原作者，不在 MIT 范围内
+
+完整边界见 [THIRD-PARTY.md](THIRD-PARTY.md)。

@@ -229,9 +229,15 @@ javac -encoding UTF-8 -cp forge-1.7.10-universal.jar -d classes src\mcauto\*.jav
 | `zgxhzhr/LetMeSeeSee` | `1.21.1-neoforge` | 补 1.21.1 NeoForge 构建、自动化入口（读 `-Dmcauto.*`）、实体图标导出 |
 | `zgxhzhr/IconRenderer` | `v2.0` | 新增 `Fabric-1.16.5` / `1.18.2` / `1.19.2` 构建配置 + `McAutoEntry` 自触发入口 |
 
-构建产物在 release 资产里（`let_me_see_see-1.0.8-mcauto.jar`、
-`IconRenderer-Fabric-*-mcauto.jar`）。**fork 的 release 只放我们自己的构建**，
-上游 jar 不放、也不合并上游分支（只 cherry-pick，见各仓库 `FORK.md`）。
+构建产物**发在各自 fork 仓库的 release 里**，不放在本仓库：
+
+- `zgxhzhr/LetMeSeeSee` → release `mcauto-1.0.8`（LGPL-3.0，含许可全文与源码说明）
+- `zgxhzhr/IconRenderer` → release `fabric-all-mcauto`（GPL-3.0，同上）
+
+原因：这两个上游分别是 LGPL-3.0 / GPL-3.0，二进制要和许可全文、源码声明一起发；
+而本仓库是 MIT，混在一起会让 MIT 声明失效（聚合可以，合并不行）。
+**fork 的 release 只放我们自己的构建**，上游 jar 不放、也不合并上游分支
+（只 cherry-pick，见各仓库 `FORK.md`）。
 
 ### 7.3 自备的第三方 jar（**不在** release 里）
 
