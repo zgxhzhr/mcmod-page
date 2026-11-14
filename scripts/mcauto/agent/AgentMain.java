@@ -158,6 +158,30 @@ public final class AgentMain {
         }
         log("类已就绪，开始反射（探测世界状态）");
 
+        // noworld=true：不要求进世界，客户端初始化完就直接导出。
+        // 有些工具（IRR）只用物品注册表和渲染器，标题界面也能跑。
+        if ("true".equalsIgnoreCase(PARAMS.getOrDefault("noworld",
+                System.getProperty("mcauto.noworld", "false")))) {
+            log("noworld 模式：不等世界，15 秒后直接导出");
+            Thread.sleep(15000);
+            for (int i = 0; i < 60; i++) {
+                try {
+                    Object mcNow = mcInstance(mcClass);
+                    if (mcNow != null) {
+                        runExportOnMainThread(mcClass, mcNow, mode);
+                        writeDone(gameDir);
+                        log("导出完成，已写 _mcauto_done");
+                        return;
+                    }
+                } catch (Throwable e) {
+                    log("noworld 尝试失败: " + e);
+                }
+                Thread.sleep(1000);
+            }
+            writeError(gameDir, "noworld 模式下也拿不到 Minecraft 实例");
+            return;
+        }
+
         // 第二阶段：反射，失败就重试 —— 加载期早一秒都可能炸
         while (System.currentTimeMillis() - start < timeoutMs) {
             {

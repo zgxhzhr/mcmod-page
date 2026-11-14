@@ -435,6 +435,8 @@ def main() -> int:
     ap.add_argument("--mc-dir", default=str(MC_DIR))
     ap.add_argument("--username", default="mcauto")
     ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--noworld", action="store_true",
+                    help="不等进世界，客户端就绪后直接导出（IRR 这类只需要注册表的工具）")
     ap.add_argument("--keep-open", action="store_true", help="导出后不杀进程，方便看界面")
     ap.add_argument("--hidden", action="store_true", help="把客户端窗口移到屏幕外，不抢前台")
     ap.add_argument("--console", action="store_true",
@@ -514,6 +516,8 @@ def main() -> int:
         if not chosen_agent.exists():
             raise SystemExit(f"缺 agent：{chosen_agent}，先跑 build_agent.py")
         _wa = ",world=mcauto" if legacy_world else ""
+        if getattr(a, "noworld", False):
+            _wa += ",noworld=true"
         agent_arg = (f"-javaagent:{chosen_agent}=mode={a.mode},timeout={a.timeout}{_wa},"
                      f"gameDir={game}")
         extra = []
