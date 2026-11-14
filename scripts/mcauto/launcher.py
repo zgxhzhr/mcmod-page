@@ -32,6 +32,10 @@ from pathlib import Path
 DEFAULT_MC = Path(r"E:\PCL\.minecraft")
 # 1.21 系要 Java 21；1.16-1.20 要 Java 17；1.12.2 要 Java 8
 JAVA_CANDIDATES = [
+    # 注意：这个路径必须在**工作区之外**。DSH 把工作区（E:\Mod）标成 Low 完整性，
+    # 从工作区里启动的 exe 会继承 Low IL，连 TEMP 都写不了（Minecraft 的
+    # zipfs 重映射和 ImageIO 都会 AccessDenied）。
+    r"C:\Users\MKIII\jdks\jdk8\bin\javaw.exe",
     r"C:\Program Files\Java\jdk-21.0.12\bin\javaw.exe",
     r"C:\Program Files\Java\jdk-17\bin\javaw.exe",
     r"C:\Program Files\Java\jdk-25\bin\javaw.exe",
@@ -64,6 +68,8 @@ def find_java(version: str) -> str:
     for c in JAVA_CANDIDATES:
         if not Path(c).exists():
             continue
+        if want == 8 and (r"_tools\jdk8" in c or "jdk8" in c.replace("-", "")):
+            return c
         if f"jdk-{want}" in c or (want == 21 and "jdk-21" in c):
             return c
     # 找不到就按顺序第一个存在的
