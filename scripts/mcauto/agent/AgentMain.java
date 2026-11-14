@@ -118,6 +118,7 @@ public final class AgentMain {
         long start = System.currentTimeMillis();
         Class<?> mcClass = null;
         log("等待 Minecraft 类加载…");
+        long lastPhaseLog = 0;
 
         // 第一阶段：**零反射**，只看类是否已加载。
         // 教训：在 Forge 模组加载期对 Minecraft 调 getDeclaredMethods()，会触发事件总线的
@@ -138,8 +139,17 @@ public final class AgentMain {
             boolean worldReady = findClassAny(LEVEL_TYPES) != null;
             boolean forgeReady = findClass("net.minecraftforge.client.event.ScreenEvent") != null
                     || findClass("net.minecraftforge.common.MinecraftForge") != null;
-            if (mcClass != null && worldReady && (forgeReady || findClass("net.minecraftforge.eventbus.EventBus") == null)) {
+            // 阶段一只需要「客户端类已出现 + Forge 转换器已就绪」。
+            // 之前还要求 worldReady（世界类已加载），但世界类名各版本差异太大，
+            // 1.16.5 上永远匹配不到，于是阶段一吃掉了整个超时（踩过）。
+            boolean longEnough = System.currentTimeMillis() - start > 8000;
+            if (mcClass != null && (forgeReady || worldReady || longEnough)) {
                 break;
+            }
+            if (System.currentTimeMillis() - lastPhaseLog > 5000) {
+                lastPhaseLog = System.currentTimeMillis();
+                log("阶段一等待中: mcClass=" + (mcClass == null ? "null" : mcClass.getName())
+                        + " worldReady=" + worldReady + " forgeReady=" + forgeReady);
             }
             Thread.sleep(POLL_MS);
         }
@@ -204,7 +214,7 @@ public final class AgentMain {
                 if (mc != null) {
                     Object level = fieldByType(mc, LEVEL_TYPES);
                     if (level == null) {
-                        level = fieldByNames(mc, new String[]{"field_71441_e", "field_71308_aa", "world"});
+                        level = fieldByNames(mc, new String[]{"field_71441_e", "field_71308_aa", "world", "level"});
                     }
                     Object player = fieldByType(mc, PLAYER_TYPES);
                     if (player == null) {
@@ -598,42 +608,63 @@ public final class AgentMain {
      * （1.12.2 的 Forge 服务端还要单独装，坑很深）。
      */
     private static boolean launchWorld(Object mc, String worldName) {
-        // launchIntegratedServer 在 1.16.5 是 private，getMethods() 找不到，
-        // 必须遍历类层次的 declared methods 并 setAccessible。
+        // 各版本进世界的方法名/签名都不一样，都试一遍（都是 private 的）：
+        //   1.16.5 : loadWorld(String, DynamicRegistries.Impl, Function, Function4,
+        //                     boolean, WorldSelectionType, boolean)  7 参
+        //   1.12.2 : launchIntegratedServer(String, String, WorldSettings)  3 参
+        // 策略：名字里带 loadworld / launchintegratedserver，第一个参数是 String 的都要试。
         java.util.List<Method> cands = new java.util.ArrayList<>();
         for (Class<?> k = mc.getClass(); k != null && k != Object.class; k = k.getSuperclass()) {
-            for (Method m : k.getDeclaredMethods()) {
+            Method[] ms;
+            try {
+                ms = k.getDeclaredMethods();
+            } catch (Throwable e) {
+                continue;
+            }
+            for (Method m : ms) {
+                // 跳过编译器生成的 lambda$xxx / access$xxx，之前就误调到了
+                // lambda$loadWorld$25（那是内部回调，调了没有意义）
+                if (m.isSynthetic() || m.getName().startsWith("lambda$")) {
+                    continue;
+                }
                 Class<?>[] ps = m.getParameterTypes();
-                boolean byName = m.getName().toLowerCase().contains("integratedserver");
-                boolean bySig = ps.length >= 2 && ps[0] == String.class && ps[1] == String.class;
+                if (ps.length < 1 || ps[0] != String.class) {
+                    continue;
+                }
+                String n = m.getName().toLowerCase();
+                boolean byName = n.contains("loadworld") || n.contains("launchintegratedserver");
+                boolean bySig = ps.length >= 2 && ps[1] == String.class;
                 if (byName || bySig) {
                     cands.add(m);
                 }
             }
         }
+        cands.sort((a, b) -> {
+            boolean aReal = a.getName().equalsIgnoreCase("loadWorld")
+                    || a.getName().equalsIgnoreCase("launchIntegratedServer");
+            boolean bReal = b.getName().equalsIgnoreCase("loadWorld")
+                    || b.getName().equalsIgnoreCase("launchIntegratedServer");
+            return aReal == bReal ? 0 : (aReal ? -1 : 1);
+        });
         for (Method m : cands) {
             Class<?>[] ps = m.getParameterTypes();
-            if (ps.length < 2) {
-                continue;
-            }
             Object[] args = new Object[ps.length];
-            boolean ok = true;
             for (int i = 0; i < ps.length; i++) {
-                if (i < 2) {
+                if (i == 0 || (ps[i] == String.class && i == 1)) {
                     args[i] = worldName;
+                } else if (ps[i] == boolean.class) {
+                    args[i] = Boolean.FALSE;
+                } else if (ps[i] == int.class) {
+                    args[i] = 0;
                 } else if (ps[i].isPrimitive()) {
-                    ok = false;
-                    break;
+                    args[i] = null;
                 } else {
                     args[i] = null;
                 }
             }
-            if (!ok) {
-                continue;
-            }
             try {
                 m.setAccessible(true);
-                log("调用 " + m.getName() + " 载入存档 " + worldName);
+                log("调用 " + m.getName() + " (" + ps.length + " 参) 载入存档 " + worldName);
                 m.invoke(mc, args);
                 return true;
             } catch (Throwable e) {

@@ -539,6 +539,10 @@ def main() -> int:
         mi = argv.index(main_class)
     except ValueError:
         mi = argv.index(next(x for x in argv if "Launcher" in x or "Main" in x))
+    if a.console:
+        print(f"      注入 agent 参数: {agent_arg}")
+        if extra:
+            print(f"      注入 -D 参数: {' '.join(extra)}")
     argv = argv[:mi] + [agent_arg] + extra + argv[mi:]
     # 1.20+ 才有 quickPlay：直接进世界，跳过主菜单
     server_proc = None
