@@ -69,6 +69,66 @@ def detect_modid(jars: list[Path], tool_modid: str) -> str:
     return ""
 
 
+def _start_local_server(game: Path, version: str, java: str, port: int = 25566,
+                        timeout_s: int = 180) -> subprocess.Popen | None:
+    """起一个本地专用服务端，供 1.20 以下的客户端连入。
+
+    为什么需要：--quickPlaySingleplayer 是 1.20 才有的参数。
+    1.19.2 及更早的客户端只能停在标题界面，不会自己进世界，
+    而导出要求 Minecraft.level 非空。
+
+    做法：用 make_world 缓存里的 server.jar 在 game 目录外起一个服务端，
+    客户端用 --server 127.0.0.1 --port <port> 连进去 —— 连服务器也算进世界。
+    """
+    mcver = mc_version_of(version)
+    jar = Path(r"E:\Mod\百科-语料\mcauto-cache") / f"server-{mcver}.jar"
+    if not jar.exists():
+        print(f"      没有 {jar.name}，先用 make_world.py --version {mcver} 生成本地服务端")
+        return None
+
+    sdir = game.parent / ("_server_%d" % port)
+    if sdir.exists():
+        # 上一轮的服务端可能还在占文件；忽略失败，换个新目录名
+        shutil.rmtree(sdir, ignore_errors=True)
+        if sdir.exists():
+            sdir = game.parent / ("_server_%d_%d" % (port, int(time.time())))
+    sdir.mkdir(parents=True)
+    (sdir / "eula.txt").write_text("eula=true\n", encoding="utf-8")
+    (sdir / "server.properties").write_text("\n".join([
+        "level-type=minecraft:flat",
+        "level-name=world",
+        "online-mode=false",
+        "server-port=%d" % port,
+        "spawn-protection=0",
+        "allow-nether=false",
+        "max-tick-time=-1",
+        "sync-chunk-writes=false",
+        "view-distance=4",
+        "difficulty=peaceful",
+        "gamemode=creative",
+    ]) + "\n", encoding="utf-8")
+    # 服务端也要装同一批 mod（客户端模组在服务端加载但不生效，够用）
+    if (game / "mods").is_dir():
+        shutil.copytree(game / "mods", sdir / "mods")
+
+    print(f"      启动本地服务端（端口 {port}）…")
+    proc = subprocess.Popen([java, "-Xmx1G", "-jar", str(jar), "--nogui"],
+                            cwd=str(sdir), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace")
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        line = proc.stdout.readline()
+        if not line:
+            break
+        if "Done (" in line or "For help, type" in line:
+            print(f"      服务端就绪（{int(time.time()-t0)}s）")
+            return proc
+    print("      服务端没起来")
+    proc.kill()
+    return None
+
+
 def _supports_quickplay(version: str) -> bool:
     """--quickPlaySingleplayer 是 1.20 引入的。"""
     import re
@@ -76,6 +136,23 @@ def _supports_quickplay(version: str) -> bool:
     if not m:
         return False
     return int(m.group(1)) >= 20
+
+
+def mc_version_of(version_name: str) -> str:
+    """从 PCL 的版本名里推出 MC 版本。
+
+    PCL 的版本名五花八门：
+      1.20.1-Forge_47.4.26          → 1.20.1
+      1.21.1-NeoForge_21.1.255      → 1.21.1
+      fabric-loader-0.14.12-1.19.2  → 1.19.2   ← 不能简单 split("-")[0]
+      1.20.1-Fabric 0.19.3          → 1.20.1
+    MC 版本都以 1. 开头，所以取第一个形如 1.x[.y] 的片段。
+    """
+    import re as _re
+    m = _re.search(r"\b1\.\d+(?:\.\d+)?\b", version_name)
+    if m:
+        return m.group(0)
+    return version_name.split("-")[0]
 
 
 def prepare(work: Path, version: str, mods: list[Path], mode: str) -> Path:
@@ -106,7 +183,7 @@ def prepare(work: Path, version: str, mods: list[Path], mode: str) -> Path:
     ]) + "\n", encoding="utf-8")
 
     # 存档：拷进 saves/
-    mcver = version.split("-")[0]
+    mcver = mc_version_of(version)
     world = WORLDS / f"{mcver}-flat"
     if not (world / "level.dat").exists():
         raise SystemExit(
@@ -402,10 +479,17 @@ def main() -> int:
     mi = argv.index(next(x for x in argv if "Launcher" in x or "Main" in x))
     argv = argv[:mi] + [agent_arg] + extra + argv[mi:]
     # 1.20+ 才有 quickPlay：直接进世界，跳过主菜单
+    server_proc = None
     if _supports_quickplay(a.version):
         argv += ["--quickPlaySingleplayer", "mcauto"]
     else:
-        print("  ⚠ 该版本不支持 --quickPlaySingleplayer，需要别的进世界手段")
+        # 1.20 以下没有 quickPlay：起本地服务端，客户端连进去
+        server_proc = _start_local_server(game, a.version,
+                                          launcher.find_java(a.version).replace("javaw", "java"))
+        if server_proc is None:
+            print("  ⚠ 起不了本地服务端，客户端会停在标题界面")
+        else:
+            argv += ["--server", "127.0.0.1", "--port", "25566"]
 
     print(f"[3/4] 启动客户端  pid 待定")
     agent_log = None
@@ -437,6 +521,16 @@ def main() -> int:
         prod_dir = prod_dir / target
 
     restore_cursor()
+    if server_proc is not None and server_proc.poll() is None:
+        try:
+            server_proc.stdin.write("stop\n")
+            server_proc.stdin.flush()
+        except Exception:
+            pass
+        try:
+            server_proc.wait(timeout=20)
+        except Exception:
+            server_proc.kill()
     if not a.keep_open and proc.poll() is None:
         proc.terminate()
         try:

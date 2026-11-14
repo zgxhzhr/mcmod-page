@@ -38,8 +38,21 @@ JAVA_CANDIDATES = [
 ]
 
 
+def mcver_of(version: str) -> str:
+    """从 PCL 版本名里取出 MC 版本（可能是 inheritsFrom 形式的 fabric-loader-...-1.19.2）"""
+    import re
+    m = re.search(r"\b1\.\d+(?:\.\d+)?\b", version)
+    return m.group(0) if m else version
+
+
 def find_java(version: str) -> str:
-    """按 MC 版本猜 Java。返回 javaw.exe 路径（无控制台窗口）。"""
+    """按 MC 版本猜 Java。返回 javaw.exe 路径（无控制台窗口）。
+
+    注意：先归一化版本名 —— PCL 的 Fabric 版本可能叫
+    fabric-loader-0.14.12-1.19.2，直接 startswith 判断会落到 else 拿 JDK 21，
+    而 loader 0.14.12 的 mixin 在 JDK 21 上会炸（LambdaMetafactory 找不到）。
+    """
+    version = mcver_of(version)
     if version.startswith(("1.7", "1.8", "1.9", "1.10", "1.11", "1.12")):
         want = 8
     elif version.startswith(("1.13", "1.14", "1.15", "1.16")):
@@ -83,17 +96,105 @@ def rule_allows(rules) -> bool:
     return allowed
 
 
-def build(mc_dir: Path, version: str, game_dir: Path, username: str,
-          java: str, extra_jvm: list[str], width: int, height: int,
-          agent: str | None, export_path: str | None) -> list[str]:
+VANILLA_CACHE = Path(r"E:\Mod\百科-语料\mcauto-cache\vanilla")
+
+
+def _mojang_manifest() -> dict:
+    import urllib.request
+    cache = VANILLA_CACHE / "version_manifest_v2.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    if cache.exists():
+        return json.loads(cache.read_text(encoding="utf-8"))
+    req = urllib.request.Request(
+        "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+        headers={"User-Agent": "mcauto/1"})
+    data = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    cache.write_text(json.dumps(data), encoding="utf-8")
+    return data
+
+
+def ensure_vanilla(vid: str) -> tuple[Path, Path | None]:
+    """确保原版版本 json 与客户端 jar 在缓存里；返回 (json, jar)。
+
+    为什么要这个：Fabric installer 生成的版本 json 带 inheritsFrom=<原版>，
+    而用户机器上可能只装了 Forge/NeoForge 的扁平版本，没有原版目录。
+    这里从 Mojang 拉一份放到**我们自己的缓存**，不往 PCL 的 .minecraft 里写东西。
+    """
+    import urllib.request
+    d = VANILLA_CACHE / vid
+    d.mkdir(parents=True, exist_ok=True)
+    jp = d / f"{vid}.json"
+    jj = d / f"{vid}.jar"
+    if not jp.exists():
+        man = _mojang_manifest()
+        ver = next((v for v in man["versions"] if v["id"] == vid), None)
+        if not ver:
+            raise SystemExit(f"Mojang 清单里没有版本 {vid}")
+        meta = json.loads(urllib.request.urlopen(
+            urllib.request.Request(ver["url"], headers={"User-Agent": "mcauto/1"}),
+            timeout=30).read())
+        jp.write_text(json.dumps(meta), encoding="utf-8")
+        client = (meta.get("downloads") or {}).get("client")
+        if client and not jj.exists():
+            print(f"[launcher] 下载原版 {vid} 客户端 jar …")
+            urllib.request.urlretrieve(client["url"], jj)
+    return jp, (jj if jj.exists() else None)
+
+
+def resolve_version_json(mc_dir: Path, version: str) -> tuple[dict, Path | None]:
+    """解析 inheritsFrom 链，返回 (合并后的 json, 原版客户端 jar 路径)。"""
     vdir = mc_dir / "versions" / version
     js = list(vdir.glob("*.json"))
     if not js:
         raise SystemExit(f"版本不存在：{vdir}")
-    vj = json.loads(js[0].read_text(encoding="utf-8"))
-    if vj.get("inheritsFrom"):
-        raise SystemExit(f"该 version json 带 inheritsFrom={vj['inheritsFrom']}，"
-                         "本脚本只处理 PCL 生成的扁平化 json")
+    child = json.loads(js[0].read_text(encoding="utf-8"))
+    if not child.get("inheritsFrom"):
+        return child, None
+
+    parent_id = child["inheritsFrom"]
+    parent = None
+    pdir = mc_dir / "versions" / parent_id
+    pjs = list(pdir.glob("*.json")) if pdir.exists() else []
+    if pjs:
+        parent = json.loads(pjs[0].read_text(encoding="utf-8"))
+        parent_jar = pdir / f"{parent_id}.jar"
+        vanilla_jar = parent_jar if parent_jar.exists() else None
+    else:
+        print(f"[launcher] 本机没有原版 {parent_id}，从 Mojang 补到缓存")
+        pj, vanilla_jar = ensure_vanilla(parent_id)
+        parent = json.loads(pj.read_text(encoding="utf-8"))
+
+    # 合并：父的库在前、子的库在后（同名后者覆盖）；参数父前子后
+    merged = dict(parent)
+    for k in ("mainClass", "assetIndex", "assets", "downloads", "logging",
+              "javaVersion", "type", "releaseTime", "time", "id"):
+        if k in child:
+            merged[k] = child[k]
+    libs = list(parent.get("libraries") or [])
+    child_libs = child.get("libraries") or []
+    names_child = {l.get("name") for l in child_libs}
+    libs = [l for l in libs if l.get("name") not in names_child] + child_libs
+    merged["libraries"] = libs
+
+    pa = parent.get("arguments") or {}
+    ca = child.get("arguments") or {}
+    merged["arguments"] = {
+        "jvm": list(pa.get("jvm") or []) + list(ca.get("jvm") or []),
+        "game": list(pa.get("game") or []) + list(ca.get("game") or []),
+    }
+    if child.get("minecraftArguments"):
+        merged["minecraftArguments"] = child["minecraftArguments"]
+    if child.get("jar"):
+        merged["jar"] = child["jar"]
+    print(f"[launcher] 已合并继承链：{version} ← {parent_id}")
+    return merged, vanilla_jar
+
+
+def build(mc_dir: Path, version: str, game_dir: Path, username: str,
+          java: str, extra_jvm: list[str], width: int, height: int,
+          agent: str | None, export_path: str | None) -> list[str]:
+    vdir = mc_dir / "versions" / version
+    vj, vanilla_jar = resolve_version_json(mc_dir, version)
     libs_dir = mc_dir / "libraries"
     assets_dir = mc_dir / "assets"
     natives = game_dir / "_natives"
@@ -128,6 +229,9 @@ def build(mc_dir: Path, version: str, game_dir: Path, username: str,
     vjar = vdir / f"{version}.jar"
     if vjar.exists():
         cp.append(str(vjar))
+    elif vanilla_jar is not None:
+        # inheritsFrom 场景：原版客户端 jar 在父版本目录或我们的缓存里
+        cp.append(str(vanilla_jar))
 
     # 去重：1.21.1 的 version json 里同一路径会列两次（原版库 + NeoForge 追加库有重叠），
     # 重复项会让 Bootstraplauncher 的 UnionFileSystem 抛 duplicateKeyException，客户端秒退。
