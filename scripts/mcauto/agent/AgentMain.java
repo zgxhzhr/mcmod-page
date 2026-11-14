@@ -136,8 +136,22 @@ public final class AgentMain {
             if (queue == null) {
                 return autoConnect(inst, addrF);
             }
-            queue.invoke(mc, (Runnable) () -> autoConnect(inst, addrF));
-            return true;
+            final boolean[] res = new boolean[1];
+            final boolean[] doneFlag = new boolean[1];
+            queue.invoke(mc, (Runnable) () -> {
+                try {
+                    res[0] = autoConnect(inst, addrF);
+                } finally {
+                    doneFlag[0] = true;
+                }
+            });
+            // 等真实结果（最多 5 秒），否则「投递成功」会被当成「连接成功」，
+            // 回落逻辑永远不触发（踩过）
+            long dl = System.currentTimeMillis() + 5000;
+            while (!doneFlag[0] && System.currentTimeMillis() < dl) {
+                Thread.sleep(100);
+            }
+            return res[0];
         } catch (Throwable e) {
             log("自动连接投递失败: " + e);
             return false;
@@ -735,6 +749,89 @@ public final class AgentMain {
         return false;
     }
 
+    private static int rank(String name) {
+        String n = name.toLowerCase();
+        if (n.equals("createlevel")) {
+            return 0;
+        }
+        if (n.equals("loadlevel")) {
+            return 1;
+        }
+        if (n.equals("loadworld")) {
+            return 2;
+        }
+        if (n.equals("launchintegratedserver")) {
+            return 3;
+        }
+        return 9;
+    }
+
+    /**
+     * 按参数类型尽力构造一个能用的值。
+     * 1.16.5 的 loadWorld 需要 DynamicRegistries.Impl（注册表）和 WorldSelectionType（枚举），
+     * 传 null 会静默失败，所以这里：
+     *   · 名字以 Impl 结尾的类型 → 找它的 builtin() 静态方法
+     *   · 枚举类型 → 取第一个常量
+     */
+    private static Object argForType(Class<?> pt, String worldName, int index) {
+        if (index == 0) {
+            return worldName;
+        }
+        if (pt == String.class) {
+            return worldName;
+        }
+        if (pt == boolean.class) {
+            return Boolean.FALSE;
+        }
+        if (pt == int.class) {
+            return 0;
+        }
+        if (pt.isPrimitive()) {
+            return null;
+        }
+        if (pt.isEnum()) {
+            Object[] consts = pt.getEnumConstants();
+            if (consts != null && consts.length > 0) {
+                // 优先 NONE / CREATE 这类，其次第一个
+                for (Object c : consts) {
+                    String n = String.valueOf(c).toLowerCase();
+                    if (n.contains("none") || n.contains("create") || n.contains("default")) {
+                        return c;
+                    }
+                }
+                return consts[0];
+            }
+            return null;
+        }
+        String simple = pt.getSimpleName();
+        if (simple.endsWith("Impl") || simple.equals("DynamicRegistries")) {
+            // 找 builtin()
+            try {
+                Method b = pt.getMethod("builtin");
+                Object v = b.invoke(null);
+                if (v != null) {
+                    log("  注册表参数用 " + pt.getName() + ".builtin() 构造成功");
+                    return v;
+                }
+            } catch (Throwable ignored) {
+            }
+            for (Method m : pt.getMethods()) {
+                if (m.getParameterCount() == 0 && java.lang.reflect.Modifier.isStatic(m.getModifiers())
+                        && pt.isAssignableFrom(m.getReturnType())) {
+                    try {
+                        Object v = m.invoke(null);
+                        if (v != null) {
+                            log("  注册表参数用 " + pt.getName() + "." + m.getName() + "() 构造成功");
+                            return v;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     private static boolean launchWorld(Object mc, String worldName) {
         // 各版本进世界的方法名/签名都不一样，都试一遍（都是 private 的）：
         //   1.16.5 : loadWorld(String, DynamicRegistries.Impl, Function, Function4,
@@ -760,35 +857,29 @@ public final class AgentMain {
                     continue;
                 }
                 String n = m.getName().toLowerCase();
-                boolean byName = n.contains("loadworld") || n.contains("launchintegratedserver");
+                boolean byName = n.contains("loadworld") || n.contains("launchintegratedserver")
+                        || n.contains("createlevel") || n.contains("loadlevel");
                 boolean bySig = ps.length >= 2 && ps[1] == String.class;
                 if (byName || bySig) {
                     cands.add(m);
                 }
             }
         }
+        // 排序：名字最像「创建/载入世界」的优先，其次参数少的优先
+        // （1.16.5 的 loadWorld 有 7 个参数，其中 3 个是必需对象，单靠 null 补不齐）
         cands.sort((a, b) -> {
-            boolean aReal = a.getName().equalsIgnoreCase("loadWorld")
-                    || a.getName().equalsIgnoreCase("launchIntegratedServer");
-            boolean bReal = b.getName().equalsIgnoreCase("loadWorld")
-                    || b.getName().equalsIgnoreCase("launchIntegratedServer");
-            return aReal == bReal ? 0 : (aReal ? -1 : 1);
+            int ra = rank(a.getName());
+            int rb = rank(b.getName());
+            if (ra != rb) {
+                return ra - rb;
+            }
+            return a.getParameterCount() - b.getParameterCount();
         });
         for (Method m : cands) {
             Class<?>[] ps = m.getParameterTypes();
             Object[] args = new Object[ps.length];
             for (int i = 0; i < ps.length; i++) {
-                if (i == 0 || (ps[i] == String.class && i == 1)) {
-                    args[i] = worldName;
-                } else if (ps[i] == boolean.class) {
-                    args[i] = Boolean.FALSE;
-                } else if (ps[i] == int.class) {
-                    args[i] = 0;
-                } else if (ps[i].isPrimitive()) {
-                    args[i] = null;
-                } else {
-                    args[i] = null;
-                }
+                args[i] = argForType(ps[i], worldName, i);
             }
             try {
                 m.setAccessible(true);
