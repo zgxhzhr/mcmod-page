@@ -58,16 +58,26 @@ python scripts\check-page-structure.py --help
 把模组 jar 变成站方能直接吃的 `json + png`。全程无人值守：隔离环境、自动进世界、
 自动触发导出、自动补前置、自动收产物。
 
-### 支持矩阵
+### 支持矩阵（全部实测）
 
-| MC / 加载器 | 导出工具 | 触发方式 | 状态 |
+| MC / 加载器 | 导出工具 | 进世界方式 | 状态 |
 |---|---|---|---|
-| **1.21.1 NeoForge** | LetMeSeeSee（LMS） | agent 反射调静态入口 | ✅ 物品 + 实体 |
-| **1.20.1 Forge** | IconRenderer-Forge | agent 派发客户端命令 | ✅ 物品 + 实体 |
-| **1.20.1 Fabric** | IconRenderer（fork） | 模组自己 tick 检测 | ✅ 物品 + 实体 |
-| 1.16.5 及更早 | — | — | ⬜ 未打通 |
+| **1.21.1 NeoForge** | LetMeSeeSee（fork） | `--quickPlaySingleplayer` | ✅ 物品 + 实体 |
+| **1.20.1 Forge** | IconRenderer-Forge | `--quickPlaySingleplayer` | ✅ |
+| **1.20.1 Fabric** | IconRenderer（fork） | `--quickPlaySingleplayer` | ✅ |
+| **1.19.2 Forge** | IconRenderer-Forge | 本地服务端 + `--server` | ✅ |
+| **1.19.2 Fabric** | IconRenderer（fork） | 本地服务端 + `--server` | ✅ |
+| **1.18.2 Forge** | IconRenderer-Forge | 本地服务端 + agent | ✅ |
+| **1.18.2 Fabric** | IconRenderer（fork） | 本地服务端 + `--server` | ✅ |
+| **1.16.5 Forge** | IRR-1.0-1.16.X | **mod 打开 ConnectingScreen** | ✅ |
+| **1.16.5 Fabric** | IconRenderer（fork） | 本地服务端 + 模组自连 | ✅ |
+| **1.12.2 Forge** | IRR_V1.1.0 | **mod 调 launchIntegratedServer** | ✅ |
+| **1.7.10 Forge** | IRR_V1.1.0 | **mod 调 launchIntegratedServer** | ✅ |
 
-工具都是 mcmod 站方提供的；我们只做自动化和两个 fork（见下）。
+`1.16.5` 及更早的 Forge 必须走 **mod 侧集成**——原因是这些版本没有
+`--quickPlaySingleplayer`，而 1.12.2/1.7.10 连 MC 类名都是混淆的
+（`Minecraft` 叫 `bib`），javaagent 按名反射拿不到任何东西。
+三个 mod 工程在 `scripts/mcauto/world-mod*/`，各自 README 记了完整的坑。
 
 ### 一条命令
 
