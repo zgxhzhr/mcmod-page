@@ -598,27 +598,49 @@ public final class AgentMain {
      * （1.12.2 的 Forge 服务端还要单独装，坑很深）。
      */
     private static boolean launchWorld(Object mc, String worldName) {
-        for (Method m : mc.getClass().getMethods()) {
-            if (!m.getName().toLowerCase().contains("launchintegratedserver")) {
-                continue;
-            }
-            Class<?>[] ps = m.getParameterTypes();
-            try {
-                if (ps.length == 3 && ps[0] == String.class && ps[1] == String.class) {
-                    log("调用 launchIntegratedServer(" + worldName + ")");
-                    m.invoke(mc, worldName, worldName, null);
-                    return true;
+        // launchIntegratedServer 在 1.16.5 是 private，getMethods() 找不到，
+        // 必须遍历类层次的 declared methods 并 setAccessible。
+        java.util.List<Method> cands = new java.util.ArrayList<>();
+        for (Class<?> k = mc.getClass(); k != null && k != Object.class; k = k.getSuperclass()) {
+            for (Method m : k.getDeclaredMethods()) {
+                Class<?>[] ps = m.getParameterTypes();
+                boolean byName = m.getName().toLowerCase().contains("integratedserver");
+                boolean bySig = ps.length >= 2 && ps[0] == String.class && ps[1] == String.class;
+                if (byName || bySig) {
+                    cands.add(m);
                 }
-                if (ps.length == 2 && ps[0] == String.class && ps[1] == String.class) {
-                    log("调用 launchIntegratedServer(" + worldName + ") [2 参]");
-                    m.invoke(mc, worldName, worldName);
-                    return true;
-                }
-            } catch (Throwable e) {
-                log("launchIntegratedServer 失败: " + e);
             }
         }
-        log("没找到 launchIntegratedServer 方法");
+        for (Method m : cands) {
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps.length < 2) {
+                continue;
+            }
+            Object[] args = new Object[ps.length];
+            boolean ok = true;
+            for (int i = 0; i < ps.length; i++) {
+                if (i < 2) {
+                    args[i] = worldName;
+                } else if (ps[i].isPrimitive()) {
+                    ok = false;
+                    break;
+                } else {
+                    args[i] = null;
+                }
+            }
+            if (!ok) {
+                continue;
+            }
+            try {
+                m.setAccessible(true);
+                log("调用 " + m.getName() + " 载入存档 " + worldName);
+                m.invoke(mc, args);
+                return true;
+            } catch (Throwable e) {
+                log("  " + m.getName() + " 失败: " + e);
+            }
+        }
+        log("没找到可用的载入存档方法（候选 " + cands.size() + " 个）");
         return false;
     }
 

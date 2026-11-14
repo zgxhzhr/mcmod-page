@@ -496,7 +496,8 @@ def main() -> int:
     # 直接让 agent 调 launchIntegratedServer 载入本地存档。
     import re as _re
     _mm = _re.search(r"(\d+)\.(\d+)", a.version)
-    legacy_world = bool(_mm) and int(_mm.group(1)) == 1 and int(_mm.group(2)) <= 12
+    # ≤1.16 都没有 quickPlay，且 Forge 服务端不好起，统一让 agent 自载存档
+    legacy_world = bool(_mm) and int(_mm.group(1)) == 1 and int(_mm.group(2)) <= 16
     if legacy_world:
         print("      老版本：由 agent 自己载入本地存档（不走服务端）")
 
