@@ -71,9 +71,25 @@ def detect_modid(jars: list[Path], tool_modid: str) -> str:
     return ""
 
 
+def _free_port() -> int:
+    """挑一个空闲端口。
+
+    之前固定用 25566，结果上一轮残留的服务端还占着端口，
+    新服务端 bind 失败却只表现为「服务端没起来」，排查了很久才看到
+    「FAILED TO BIND TO PORT」。改成每次动态挑端口。
+    """
+    import socket
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
 def _start_local_server(game: Path, version: str, java: str, tool_modid: str = "",
-                        port: int = 25566,
-                        timeout_s: int = 240) -> subprocess.Popen | None:
+                        port: int = 0,
+                        timeout_s: int = 240) -> tuple[subprocess.Popen | None, int]:
     """起一个本地专用服务端，供 1.20 以下的客户端连入。
 
     为什么需要：--quickPlaySingleplayer 是 1.20 才有的参数。
@@ -83,11 +99,13 @@ def _start_local_server(game: Path, version: str, java: str, tool_modid: str = "
     做法：用 make_world 缓存里的 server.jar 在 game 目录外起一个服务端，
     客户端用 --server 127.0.0.1 --port <port> 连进去 —— 连服务器也算进世界。
     """
+    if not port:
+        port = _free_port()
     mcver = mc_version_of(version)
     jar = Path(r"E:\Mod\百科-语料\mcauto-cache") / f"server-{mcver}.jar"
     if not jar.exists():
         print(f"      没有 {jar.name}，先用 make_world.py --version {mcver} 生成本地服务端")
-        return None
+        return None, port
 
     sdir = game.parent / ("_server_%d" % port)
     if sdir.exists():
@@ -117,10 +135,12 @@ def _start_local_server(game: Path, version: str, java: str, tool_modid: str = "
         dst_mods = sdir / "mods"
         dst_mods.mkdir(parents=True, exist_ok=True)
         import zipfile as _zf
-        for jar in src_mods.glob("*.jar"):
+        # 注意：这里千万别再用 jar 当循环变量 —— 上面 jar 是**服务端 jar** 的路径，
+        # 被覆盖后 -jar 就指向了模组，启动报「没有主清单属性」（踩过，排查很久）
+        for mod_jar in src_mods.glob("*.jar"):
             skip = False
             try:
-                with _zf.ZipFile(jar) as z:
+                with _zf.ZipFile(mod_jar) as z:
                     names = z.namelist()
                     for n in names:
                         if n.endswith(("mcmod.info", "mods.toml", "fabric.mod.json")):
@@ -131,7 +151,7 @@ def _start_local_server(game: Path, version: str, java: str, tool_modid: str = "
             except Exception:
                 pass
             if not skip:
-                shutil.copy2(jar, dst_mods / jar.name)
+                shutil.copy2(mod_jar, dst_mods / mod_jar.name)
 
     print(f"      启动本地服务端（端口 {port}）…")
     proc = subprocess.Popen([java, "-Xmx1G", "-jar", str(jar), "--nogui"],
@@ -139,16 +159,43 @@ def _start_local_server(game: Path, version: str, java: str, tool_modid: str = "
                             stderr=subprocess.STDOUT, text=True,
                             encoding="utf-8", errors="replace")
     t0 = time.time()
+    _first_lines = []
     while time.time() - t0 < timeout_s:
         line = proc.stdout.readline()
         if not line:
             break
+        if len(_first_lines) < 6:
+            _first_lines.append(line.rstrip())
+        if "FAILED TO BIND" in line or "Address already in use" in line:
+            print("      端口被占用了，换一个端口重试")
+            proc.kill()
+            return _start_local_server(game, version, java, tool_modid, _free_port(), timeout_s)
         if "Done (" in line or "For help, type" in line:
-            print(f"      服务端就绪（{int(time.time()-t0)}s）")
-            return proc
-    print("      服务端没起来")
+            print(f"      服务端就绪（{int(time.time()-t0)}s，端口 {port}）")
+            return proc, port
+    print(f"      服务端没起来：returncode={proc.poll()}")
+    for line in _first_lines:
+        print("        " + line[:150])
+    try:
+        head = []
+        for _ in range(8):
+            line = proc.stdout.readline()
+            if not line:
+                break
+            head.append(line.rstrip())
+        for line in head:
+            print("        " + line[:150])
+    except Exception as e:
+        print(f"        读 stdout 失败: {e}")
+    try:
+        tail = (sdir / "logs" / "latest.log")
+        if tail.exists():
+            for line in tail.read_text(encoding="utf-8", errors="replace").splitlines()[-6:]:
+                print("        " + line[:150])
+    except Exception:
+        pass
     proc.kill()
-    return None
+    return None, port
 
 
 def _supports_quickplay(version: str) -> bool:
@@ -307,12 +354,11 @@ def start_cursor_watchdog(pid: int, stop_event):
                 guard = 0
                 while user32.ShowCursor(True) < 0 and guard < 50:
                     guard += 1
-                # 把焦点从游戏窗口抢走：MC 只有失焦后才会真正松开鼠标
-                if n % 3 == 0:
-                    try:
-                        user32.SetForegroundWindow(user32.GetShellWindow())
-                    except Exception:
-                        pass
+                # 注意：这里**绝对不能**抢焦点。
+                # 之前每 900ms 调一次 SetForegroundWindow(GetShellWindow())，
+                # 结果运行时用户完全没法在别的窗口打字（焦点被反复夺走）。
+                # 松开鼠标只需要 ClipCursor(None) + 窗口不出现在前台，
+                # 我们的窗口是用 SWP_NOACTIVATE 移到屏幕外的，本来就不抢焦点。
                 # 每 2 秒把窗口挪回屏幕外（MC 可能把窗口拉回）
                 if n % 6 == 0:
                     for h in _window_handles_for_pid(pid):
@@ -321,7 +367,7 @@ def start_cursor_watchdog(pid: int, stop_event):
             except Exception:
                 pass
             n += 1
-            _t.sleep(0.3)
+            _t.sleep(1.0)
 
     th = threading.Thread(target=loop, name="cursor-watchdog", daemon=True)
     th.start()
@@ -501,9 +547,16 @@ def main() -> int:
     #   1.13~1.16 没有 quickPlay，但有可用服务端 → 起服务端 + agent 自动连接
     _minor = int(_mm.group(2)) if _mm else 99
     legacy_world = bool(_mm) and int(_mm.group(1)) == 1 and _minor <= 12
-    connect_mode = bool(_mm) and int(_mm.group(1)) == 1 and 13 <= _minor <= 16
+    # agent 侧构造 ConnectScreen 在 Forge 下拿不到类，先不用它；
+    # 直接靠 --server 参数（1.19.2 上实测能自动连），服务端由下面启动。
+    connect_mode = False
     if legacy_world:
         print("      老版本：由 agent 自己载入本地存档（不走服务端）")
+
+    # 端口要提前定：客户端参数里的 connect=host:port 在组装命令行时就会用到，
+    # 而服务端要到后面才启动。之前用占位符替换，结果替换发生在端口确定之前，
+    # 客户端连了 25566、服务端却在随机端口（踩过）。
+    server_port = _free_port()
 
     print(f"[2/4] 组装命令行（agent mode={a.mode}，输出目录 {export_dir}）")
     sys_path = str(HERE)
@@ -516,18 +569,25 @@ def main() -> int:
         # 模组自己在客户端 tick 里等世界加载完再导出；只传 -D
         agent_arg = f"-Dmcauto.modid={target}"
         extra = [f"-Dmcauto.delay={getattr(a, 'delay', 60)}"]
+        if connect_mode:
+            extra.append("-Dmcauto.connect=127.0.0.1:25566")
     else:
         chosen_agent = agent_jar_for(a.version)
         if not chosen_agent.exists():
             raise SystemExit(f"缺 agent：{chosen_agent}，先跑 build_agent.py")
         _wa = ",world=mcauto" if legacy_world else ""
+        # 端口要到启动服务端之后才知道，先用占位，真正注入时再替换
         if connect_mode:
-            _wa += ",connect=127.0.0.1:25566"
+            _wa += ",connect=127.0.0.1:PORT_PLACEHOLDER"
         if getattr(a, "noworld", False):
             _wa += ",noworld=true"
         agent_arg = (f"-javaagent:{chosen_agent}=mode={a.mode},timeout={a.timeout}{_wa},"
                      f"gameDir={game}")
         extra = []
+    if connect_mode:
+        agent_arg = agent_arg.replace("PORT_PLACEHOLDER", str(server_port))
+        extra = [x.replace("PORT_PLACEHOLDER", str(server_port)) for x in extra]
+
     if legacy_world and not a.self_trigger:
         extra = list(extra) + ["-Dmcauto.world=mcauto"]
 
@@ -557,13 +617,16 @@ def main() -> int:
     else:
         # 1.20 以下没有 quickPlay：起本地服务端，客户端连进去
         _tool_modid = TOOL_INFO.get(a.mode, {}).get("modid", "")
-        server_proc = None if legacy_world else _start_local_server(game, a.version,
-                                          launcher.find_java(a.version).replace("javaw", "java"),
-                                          _tool_modid)
+        server_proc = None
+        if not legacy_world:
+            server_proc, server_port = _start_local_server(
+                game, a.version,
+                launcher.find_java(a.version).replace("javaw", "java"),
+                _tool_modid, server_port)
         if server_proc is None:
             print("  ⚠ 起不了本地服务端，客户端会停在标题界面")
         else:
-            argv += ["--server", "127.0.0.1", "--port", "25566"]
+            argv += ["--server", "127.0.0.1", "--port", str(server_port)]
 
     print(f"[3/4] 启动客户端  pid 待定")
     agent_log = None
