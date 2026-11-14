@@ -47,6 +47,8 @@ PKG_TO_SLUG = {
     "net/darkhax": [],
     # 反直觉的：直查 lodestone 会命中同名的「Lodestone Warps」，真库是 lodestonelib
     "lodestone": ["lodestonelib"],
+    "dev/ftb/mods/ftbquests": ["ftb-quests"],
+    "dev/ftb/mods/ftbteams": ["ftb-teams"],
     "org/valkyrienskies": ["valkyrien-skies"],
 }
 
@@ -63,6 +65,37 @@ def http_json(url: str, timeout: int = 25):
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
+
+
+def installed_package_prefixes(jars: list[Path]) -> set[str]:
+    """扫已安装 jar 里出现的包前缀（取到第三段）。
+
+    用来排除**误报**：比如 LMS 自己会尝试加载 com.xkball.let_me_see_see.LMSAgent
+    并抛 ClassNotFoundException（它自带的 attach 逻辑，属于正常现象），
+    这个类其实就在 LMS 自己 jar 里，不该被当成缺依赖。
+    """
+    prefixes: set[str] = set()
+    for j in jars:
+        if not j.exists():
+            continue
+        try:
+            import zipfile
+            with zipfile.ZipFile(j) as z:
+                n = 0
+                for name in z.namelist():
+                    if not name.endswith(".class"):
+                        continue
+                    parts = name[:-6].split("/")
+                    if len(parts) >= 3:
+                        prefixes.add("/".join(parts[:3]))
+                    elif len(parts) >= 2:
+                        prefixes.add("/".join(parts[:2]))
+                    n += 1
+                    if n > 4000:
+                        break
+        except Exception:
+            continue
+    return prefixes
 
 
 def scan_missing(work: Path) -> list[str]:
@@ -129,10 +162,12 @@ def slugs_for(fqcn: str) -> list[str]:
         guesses.append(parts[2])
     if len(parts) >= 2:
         guesses.append(parts[1])
+    STOP = {"mods", "api", "core", "lib", "common", "client", "server",
+            "utils", "util", "event", "events", "data", "base", "main", "init"}
     cleaned = []
     for g in guesses:
         g = g.lower().replace("_", "-")
-        if g and g not in cleaned and len(g) > 2:
+        if g and g not in cleaned and len(g) > 2 and g not in STOP:
             cleaned.append(g)
     return cleaned
 
@@ -154,7 +189,19 @@ def search_slugs(query: str, mc: str, loader: str) -> list[str]:
     return [h["slug"] for h in hits if h.get("slug")]
 
 
-def fetch_slug(slug: str, mc: str, loader: str) -> Path | None:
+def jar_provides(jar: Path, expected_prefix: str) -> bool:
+    """校验下载到的 jar 里确实有缺失的包路径，防止下错同名/无关模组"""
+    if not expected_prefix:
+        return True
+    try:
+        import zipfile
+        with zipfile.ZipFile(jar) as z:
+            return any(n.startswith(expected_prefix.rstrip("/") + "/") for n in z.namelist())
+    except Exception:
+        return False
+
+
+def fetch_slug(slug: str, mc: str, loader: str, expect_prefix: str = "") -> Path | None:
     """按 slug 下最新匹配版本，返回本地 jar 路径；直查失败则搜索兜底"""
     if not slug:
         return None
@@ -187,6 +234,10 @@ def fetch_slug(slug: str, mc: str, loader: str) -> Path | None:
             req = urllib.request.Request(f["url"], headers=UA)
             with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as out:
                 shutil.copyfileobj(r, out)
+        if expect_prefix and not jar_provides(dest, expect_prefix):
+            print(f"    ✗ {dest.name} 里没有 {expect_prefix}，丢弃")
+            dest.unlink(missing_ok=True)
+            continue
         print(f"    ✓ {dest.name}  {dest.stat().st_size/1024/1024:.1f} MB（{v.get('version_number')}）")
         return dest
     return None
@@ -232,6 +283,13 @@ def main() -> int:
 
         work = Path(a.work)
         missing = scan_missing(work)
+        # 已经安装的模组自己带的包不算缺失（常见误报）
+        installed = installed_package_prefixes(mods)
+        before = len(missing)
+        missing = [m for m in missing
+                   if not any(m.startswith(p + "/") or m == p for p in installed)]
+        if before != len(missing):
+            print(f"  忽略 {before - len(missing)} 个已安装模组自带的类（误报）")
         missing = [m for m in missing
                    if not any(m.startswith(p) for p in SKIP_PREFIX)
                    and m not in ("minecraft", "forge", "neoforge", "fabricloader", "java")]
@@ -251,7 +309,9 @@ def main() -> int:
                 if slug in seen_slugs:
                     continue
                 seen_slugs.add(slug)
-                jar = fetch_slug(slug, a.mc, a.loader)
+                expect = "" if "/" not in fqcn and "." not in fqcn else \
+                    "/".join(fqcn.replace(".", "/").split("/")[:3])
+                jar = fetch_slug(slug, a.mc, a.loader, expect)
                 if jar and jar not in mods:
                     mods.append(jar)
                     added = True

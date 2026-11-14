@@ -141,43 +141,45 @@ public final class AgentMain {
 
     /** 在主线程（渲染线程）执行导出，否则 FBO 渲染会炸。 */
     private static void runExportOnMainThread(Class<?> mcClass, Object mc, String mode) throws Exception {
-        // 枚举所有「单 Runnable 参数」的方法，逐个投递，谁真跑了用谁。
-        // 不能只看名字：Forge(SRG) 下 execute 叫 m_18707_，而 m_6681_ 也是单 Runnable 参数，
-        // 但它并不投递任务 —— 之前就错投到它，Runnable 被吞掉，表现为「进世界后没动静」。
-        java.util.List<Method> candidates = new java.util.ArrayList<>();
-        Class<?> k = mc.getClass();
-        while (k != null && k != Object.class) {
-            for (Method m : k.getDeclaredMethods()) {
-                Class<?>[] ps = m.getParameterTypes();
-                if (ps.length == 1 && ps[0] == Runnable.class) {
-                    candidates.add(m);
+        // 只认「把任务排进队列」的那个方法，**绝不盲试**。
+        // 教训：BlockableEventLoop 里有 8 个单 Runnable 参数的方法，其中 submit 系
+        // 会在**当前线程同步执行**；把渲染任务投进去 = 在 agent 线程调 OpenGL，
+        // JVM 直接 fatal（"No context is current"），进程当场死，不可恢复。
+        // 各映射下的名字：
+        //   mojmap        execute
+        //   Forge SRG     m_18707_
+        //   intermediary  method_18856
+        String[] queueMethodNames = {"execute", "m_18707_", "method_18856", "func_213187_a"};
+        Method queue = null;
+        for (String want : queueMethodNames) {
+            Class<?> k = mc.getClass();
+            while (k != null && k != Object.class && queue == null) {
+                for (Method m : k.getDeclaredMethods()) {
+                    Class<?>[] ps = m.getParameterTypes();
+                    if (ps.length == 1 && ps[0] == Runnable.class && m.getName().equals(want)) {
+                        queue = m;
+                        break;
+                    }
                 }
+                k = k.getSuperclass();
             }
-            k = k.getSuperclass();
+            if (queue != null) {
+                log("任务投递方法 " + queue.getName() + "（映射名 " + want + "）");
+                break;
+            }
         }
-        log("找到 " + candidates.size() + " 个单 Runnable 参数的方法");
-        for (Method c : candidates) {
-            log("  候选: " + c.getDeclaringClass().getSimpleName() + "#" + c.getName());
+        if (queue == null) {
+            throw new IllegalStateException(
+                    "找不到 execute(Runnable)：候选名都没命中，不敢盲试（会崩 JVM）");
         }
-        if (candidates.isEmpty()) {
-            throw new IllegalStateException("找不到投递任务的方法");
-        }
+        queue.setAccessible(true);
 
         final Throwable[] err = new Throwable[1];
         final Object lock = new Object();
         final boolean[] done = new boolean[1];
-        final boolean[] started = new boolean[1];
-        final boolean[] onRenderThread = new boolean[1];
+
         Runnable task = () -> {
-            // 必须确认在渲染线程执行：BlockableEventLoop.submit 之类会在**当前线程**直接跑，
-            // 那样 RenderSystem 会抛 "called from wrong thread"（踩过）
-            String tn = Thread.currentThread().getName();
-            onRenderThread[0] = tn.toLowerCase().contains("render");
-            synchronized (started) {
-                started[0] = true;
-                started.notifyAll();
-            }
-            log("任务开始 mode=" + mode + " 线程=" + tn + (onRenderThread[0] ? " ✓" : " ✗ 非渲染线程"));
+            log("任务开始 mode=" + mode + " 线程=" + Thread.currentThread().getName());
             try {
                 switch (mode) {
                     case "lms":
@@ -190,9 +192,8 @@ public final class AgentMain {
                         break;
                     case "iconr":
                         commandExport(mc, "exporticons " + System.getProperty("mcauto.modid", "ALL"));
-                        // 命令只是「开始导出」，真正写文件是异步的。
-                        // 不等产物就写哨兵的话，run.py 会立刻杀掉客户端，产物永远出不来。
-                        waitForProducts(Path.of(System.getProperty("user.dir"), "IconRendererOutput"), 600_000L);
+                        waitForProducts(Path.of(System.getProperty("user.dir"), "IconRendererOutput"),
+                                600_000L);
                         break;
                     case "irr":
                         irrExport();
@@ -200,8 +201,8 @@ public final class AgentMain {
                     default:
                         throw new IllegalArgumentException("未知 mode=" + mode);
                 }
-            } catch (Throwable t) {
-                err[0] = t;
+            } catch (Throwable ex) {
+                err[0] = ex;
             } finally {
                 synchronized (lock) {
                     done[0] = true;
@@ -210,51 +211,12 @@ public final class AgentMain {
             }
         };
 
-        // 逐个候选投递，3 秒内没开始执行就换下一个
-        for (Method c : candidates) {
-            try {
-                c.setAccessible(true);
-                c.invoke(mc, task);
-            } catch (Throwable ex) {
-                log("  投递失败 " + c.getName() + ": " + ex);
-                continue;
-            }
-            synchronized (started) {
-                long dl = System.currentTimeMillis() + 3000;
-                while (!started[0] && System.currentTimeMillis() < dl) {
-                    started.wait(200);
-                }
-            }
-            if (started[0] && onRenderThread[0]) {
-                log("  任务在渲染线程执行（投递方法 " + c.getName() + "）");
-                break;
-            }
-            if (started[0] && !onRenderThread[0]) {
-                log("  " + c.getName() + " 在当前线程同步执行，换下一个");
-                // 这一轮的副作用可能已经抛错，清掉错误继续探
-                err[0] = null;
-                synchronized (lock) {
-                    done[0] = false;
-                    started[0] = false;
-                    onRenderThread[0] = false;
-                }
-                continue;
-            }
-            log("  " + c.getName() + " 没有执行任务，换下一个");
-        }
-        if (!started[0] || !onRenderThread[0]) {
-            throw new IllegalStateException("没有候选方法能把任务投递到渲染线程");
-        }
+        queue.invoke(mc, task);
 
         synchronized (lock) {
             long deadline = System.currentTimeMillis() + 600_000L;
-            long lastLog = 0;
             while (!done[0] && System.currentTimeMillis() < deadline) {
                 lock.wait(500);
-                if (!done[0] && System.currentTimeMillis() - lastLog > 10000) {
-                    lastLog = System.currentTimeMillis();
-                    log("等待导出完成…");
-                }
             }
         }
         if (err[0] != null) {

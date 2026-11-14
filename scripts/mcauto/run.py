@@ -461,4 +461,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import atexit
+    # 任何退出路径都把光标还回去：JVM fatal 崩溃时 GLFW 不会恢复，
+    # 用户的鼠标会「消失」（已经踩到三次）
+    atexit.register(restore_cursor)
+    try:
+        raise SystemExit(main())
+    finally:
+        restore_cursor()
