@@ -496,8 +496,12 @@ def main() -> int:
     # 直接让 agent 调 launchIntegratedServer 载入本地存档。
     import re as _re
     _mm = _re.search(r"(\d+)\.(\d+)", a.version)
-    # ≤1.16 都没有 quickPlay，且 Forge 服务端不好起，统一让 agent 自载存档
-    legacy_world = bool(_mm) and int(_mm.group(1)) == 1 and int(_mm.group(2)) <= 16
+    # 分级：
+    #   ≤1.12.2  没有 quickPlay，Forge 服务端也不好起 → agent 自己载入本地存档
+    #   1.13~1.16 没有 quickPlay，但有可用服务端 → 起服务端 + agent 自动连接
+    _minor = int(_mm.group(2)) if _mm else 99
+    legacy_world = bool(_mm) and int(_mm.group(1)) == 1 and _minor <= 12
+    connect_mode = bool(_mm) and int(_mm.group(1)) == 1 and 13 <= _minor <= 16
     if legacy_world:
         print("      老版本：由 agent 自己载入本地存档（不走服务端）")
 
@@ -517,6 +521,8 @@ def main() -> int:
         if not chosen_agent.exists():
             raise SystemExit(f"缺 agent：{chosen_agent}，先跑 build_agent.py")
         _wa = ",world=mcauto" if legacy_world else ""
+        if connect_mode:
+            _wa += ",connect=127.0.0.1:25566"
         if getattr(a, "noworld", False):
             _wa += ",noworld=true"
         agent_arg = (f"-javaagent:{chosen_agent}=mode={a.mode},timeout={a.timeout}{_wa},"

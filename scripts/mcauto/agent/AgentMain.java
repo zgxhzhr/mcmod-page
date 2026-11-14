@@ -43,6 +43,7 @@ public final class AgentMain {
     /** premain 解析出来的 -javaagent 参数，供其它方法读 */
     private static final java.util.Map<String, String> PARAMS = new java.util.HashMap<>();
     private static final long[] launchedWorld = new long[1];
+    private static final boolean[] connectedOnce = new boolean[1];
 
     private static final long POLL_MS = 500;
     private static Instrumentation INST;
@@ -111,6 +112,35 @@ public final class AgentMain {
             q.invoke(mc, (Runnable) () -> launchWorld(inst, wn));
         } catch (Throwable e) {
             log("载入存档失败: " + e);
+        }
+    }
+
+    /** 把「自动连接」投到渲染线程（打开界面会碰 GL） */
+    private static boolean tryAutoConnect(Class<?> mcClass, Object mc, String addr) {
+        try {
+            Method queue = null;
+            for (String want : new String[]{"execute", "m_18707_", "method_18856", "func_213187_a"}) {
+                for (Method m : mc.getClass().getMethods()) {
+                    if (m.getName().equals(want) && m.getParameterCount() == 1
+                            && m.getParameterTypes()[0] == Runnable.class) {
+                        queue = m;
+                        break;
+                    }
+                }
+                if (queue != null) {
+                    break;
+                }
+            }
+            final Object inst = mc;
+            final String addrF = addr;
+            if (queue == null) {
+                return autoConnect(inst, addrF);
+            }
+            queue.invoke(mc, (Runnable) () -> autoConnect(inst, addrF));
+            return true;
+        } catch (Throwable e) {
+            log("自动连接投递失败: " + e);
+            return false;
         }
     }
 
@@ -199,6 +229,17 @@ public final class AgentMain {
                 try {
                     mc = mcInstance(mcClass);
                     // 老版本没有 quickPlay：等几秒还没有世界，就自己载入本地存档
+                    String wantConnect = PARAMS.getOrDefault("connect",
+                            System.getProperty("mcauto.connect", ""));
+                    if (!wantConnect.isEmpty() && !connectedOnce[0]
+                            && System.currentTimeMillis() - start > 12000) {
+                        connectedOnce[0] = true;
+                        boolean ok = tryAutoConnect(mcClass, mc, wantConnect);
+                        if (!ok) {
+                            log("自动连接失败，回落到本地载入存档");
+                            launchWorld(mc, "mcauto");
+                        }
+                    }
                     String wantWorld = PARAMS.getOrDefault("world",
                             System.getProperty("mcauto.world", ""));
                     if (!wantWorld.isEmpty() && launchedWorld[0] == 0
@@ -607,6 +648,93 @@ public final class AgentMain {
      * 直接调用就能进世界，比另起一个专用服务端 + --server 简单得多
      * （1.12.2 的 Forge 服务端还要单独装，坑很深）。
      */
+    /**
+     * 自动连接本地服务端（1.13~1.16 用）。
+     *
+     * 这些版本没有 --quickPlaySingleplayer，而 --server 只是把地址填进多人界面、
+     * 不会自己连。于是直接构造 ConnectScreen 打开：
+     *   mc.setScreen(new ConnectScreen(parent, mc, new ServerData(name, "host:port", false)))
+     * 1.16.5 是 mojmap 类名（net.minecraft.client.gui.screen.ConnectScreen），可以直接反射。
+     */
+    private static boolean autoConnect(Object mc, String addr) {
+        try {
+            int colon = addr.lastIndexOf(':');
+            String host = colon > 0 ? addr.substring(0, colon) : addr;
+            int port = colon > 0 ? Integer.parseInt(addr.substring(colon + 1)) : 25565;
+            String ip = host + ":" + port;
+
+            Class<?> serverDataC = findClass("net.minecraft.client.multiplayer.ServerData");
+            if (serverDataC == null) {
+                log("找不到 ServerData 类");
+                return false;
+            }
+            Object serverData = serverDataC.getConstructor(String.class, String.class, boolean.class)
+                    .newInstance("mcauto-local", ip, false);
+
+            // 关键：用 ServerData 自己的类加载器去加载 ConnectScreen。
+            // findClass() 试的那几个加载器在 Forge 的 ModLauncher 下拿不到未加载的类，
+            // 而 ServerData 已经加载好了，它的 loader 一定是对的。
+            ClassLoader ldr = serverDataC.getClassLoader();
+            Class<?> connectC = null;
+            for (String cn : new String[]{
+                    "net.minecraft.client.gui.screens.ConnectScreen",
+                    "net.minecraft.client.gui.screen.ConnectScreen"}) {
+                try {
+                    connectC = Class.forName(cn, false, ldr);
+                    log("ConnectScreen 类找到了: " + cn);
+                    break;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (connectC == null) {
+                // 诊断：把已加载类里名字带 ConnectScreen / ServerData 的都列出来
+                int n = 0;
+                for (Class<?> c : INST.getAllLoadedClasses()) {
+                    String nm = c.getName();
+                    if (nm.contains("ConnectScreen") || nm.contains("ServerData")
+                            || nm.contains("ServerList")) {
+                        log("  候选类: " + nm);
+                        if (++n > 8) {
+                            break;
+                        }
+                    }
+                }
+                if (n == 0) {
+                    log("  已加载类里没有任何 ConnectScreen / ServerData / ServerList");
+                }
+                return false;
+            }
+            Class<?> screenC = findClass("net.minecraft.client.gui.screen.Screen");
+            Object screen = null;
+            for (java.lang.reflect.Constructor<?> ctor : connectC.getConstructors()) {
+                Class<?>[] ps = ctor.getParameterTypes();
+                if (ps.length == 3) {
+                    if (ps[0].isAssignableFrom(screenC == null ? Object.class : screenC) || ps[0] == screenC) {
+                        screen = ctor.newInstance(null, mc, serverData);
+                    } else {
+                        screen = ctor.newInstance(null, mc, serverData);
+                    }
+                    break;
+                }
+            }
+            if (screen == null) {
+                log("ConnectScreen 构造失败");
+                return false;
+            }
+            for (Method m : mc.getClass().getMethods()) {
+                if (m.getParameterCount() == 1 && m.getName().equals("setScreen")) {
+                    m.invoke(mc, screen);
+                    log("已打开连接界面 " + ip);
+                    return true;
+                }
+            }
+            log("找不到 setScreen");
+        } catch (Throwable e) {
+            log("自动连接失败: " + e);
+        }
+        return false;
+    }
+
     private static boolean launchWorld(Object mc, String worldName) {
         // 各版本进世界的方法名/签名都不一样，都试一遍（都是 private 的）：
         //   1.16.5 : loadWorld(String, DynamicRegistries.Impl, Function, Function4,
@@ -670,6 +798,13 @@ public final class AgentMain {
             } catch (Throwable e) {
                 log("  " + m.getName() + " 失败: " + e);
             }
+        }
+        if (true) {  // 临时：无条件 dump
+            StringBuilder all = new StringBuilder();
+            for (Method m : mc.getClass().getMethods()) {
+                all.append(m.getName()).append("/").append(m.getParameterCount()).append(" ");
+            }
+            log("ALLPUBLIC " + all);
         }
         log("没找到可用的载入存档方法（候选 " + cands.size() + " 个）");
         return false;
