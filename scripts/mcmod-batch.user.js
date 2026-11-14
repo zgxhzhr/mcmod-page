@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.41
+// @version      2.40
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -276,9 +276,11 @@
     return true;
   }
 
-  /** 按「有没有图标」设置「删除大/小图标」两个勾选。
-   *  mcmod 上传小图标后会自动同步出大图标，所以只要有任意一张图，两个框都不能勾；
-   *  只有两张都没有时才两个都勾。分开处理反而会把大图标判成空值。
+  /** 按字段分别设置「删除大图标 / 删除小图标」两个勾选（v2.41 起支持独立控制）。
+   *  - 没给 icon32 → 勾「删除小图标」
+   *  - 没给 icon128 → 勾「删除大图标」；但**若给了 icon32** 则不勾：
+   *    站方上传小图标后会自动同步出大图标，勾了反而把同步出来的大图删掉（v2.37 的老坑）
+   *  - 两个都没给 → 两个都勾
    *  @param {boolean} has32  是否提供了 icon32
    *  @param {boolean} has128 是否提供了 icon128
    */
@@ -293,22 +295,37 @@
       }
       return out;
     };
-    const isDel = (el) => {
+    const labelOf = (el) => {
       const lbl = ownLbl(el).replace(/\s/g, '');
       const attr = ((el.getAttribute('title') || '') + (el.name || '') + (el.id || '')).replace(/\s/g, '');
-      return /删除(大|小|大小)图标/.test(lbl) || /删除(大|小|大小)图标/.test(attr);
+      return lbl + attr;
     };
-    const hasIcon = !!(has32 || has128);
-    const dels = [...document.querySelectorAll('input[type=checkbox]')].filter(isDel);
+    const isDel = (el) => /删除(大|小|大小)图标/.test(labelOf(el));
+    const boxes = [...document.querySelectorAll('input[type=checkbox]')].filter(isDel);
+    if (!boxes.length) return { found: 0, changed: 0 };
+
     let changed = 0;
-    for (const box of dels) {
-      const wantDeleted = !hasIcon;
-      if (box.checked !== wantDeleted) { box.click(); changed += 1; }
+    for (const box of boxes) {
+      const text = labelOf(box);
+      const isSmall = /删除小图标/.test(text) || (!/删除(大)图标/.test(text) && /小/.test(text));
+      const isBig = /删除大图标/.test(text);
+      let want;
+      if (isSmall) {
+        want = !has32;
+      } else if (isBig) {
+        want = !has128 && !has32;   // 只给 icon32 时不勾：站方会自动同步大图标
+      } else {
+        want = !(has32 || has128);  // 「删除大小图标」合并框：任一有就不勾
+      }
+      if (box.checked !== want) { box.click(); changed += 1; }
     }
-    if (changed) log(hasIcon ? '有图标，已取消「删除图标」勾选 ' + changed + ' 个（大小图标自动同步）'
-                             : '无图标，已勾选「删除图标」' + changed + ' 个');
-    return { found: dels.length, changed };
+    if (changed) {
+      log('图标勾选已调整 ' + changed + ' 个（icon32=' + (has32 ? '有' : '无') +
+          '，icon128=' + (has128 ? '有' : '无') + '）');
+    }
+    return { found: boxes.length, changed };
   }
+
 
   async function fillOne(it) {
     ensureType(it.type);
@@ -325,37 +342,6 @@
     clearOrSet(qm('damage'), it.damage);
     clearOrSet(qm('oredict'), it.oredict);
     setVal(qm('remark'), it.remark || ('批量录入 ' + classId));
-
-    // 没有图标时：必须把「删除大图标」「删除小图标」都勾上（两个独立勾选框）。
-    // 页面上每个图标区有两个框：锁定X图标 / 删除X图标，所以要用 checkbox 自己的
-    // <label> 文字精确判断，不能用父级 innerText（会把「锁定」也误判成「删除」）。
-    if (!it.icon32) {
-      const ownLabel = (el) => {
-        // 1) 原生 labels 关联（<label for> / 包裹式 label）
-        if (el.labels && el.labels.length) {
-          return [...el.labels].map((l) => l.textContent || '').join(' ');
-        }
-        // 2) 紧邻的下一个兄弟节点文字（<input><label>删除小图标</label>）
-        let n = el.nextSibling, out = '';
-        for (let i = 0; n && i < 3; i += 1, n = n.nextSibling) {
-          out += (n.textContent || '') + ' ';
-        }
-        return out;
-      };
-      const isDeleteIcon = (el) => {
-        const lbl = ownLabel(el).replace(/\s/g, '');
-        const attr = ((el.getAttribute('title') || '') + (el.name || '') + (el.id || '')).replace(/\s/g, '');
-        return /删除(大|小|大小)图标/.test(lbl) || /删除(大|小|大小)图标/.test(attr);
-      };
-      const boxes = [...document.querySelectorAll('input[type=checkbox]')].filter(isDeleteIcon);
-      let clicked = 0;
-      for (const box of boxes) {
-        if (!box.checked) { box.click(); clicked += 1; await sleep(200); }
-      }
-      if (clicked) log('已勾选「删除图标」' + clicked + ' 个（大/小图标各一）');
-      else if (boxes.length) log('删除图标勾选框已是选中状态（共 ' + boxes.length + ' 个）');
-      else log('没找到「删除大图标/删除小图标」勾选框', '#fbbf24');
-    }
 
     // 无图标的条目也要勾选「删除大小图标」——不能只在有图标时才处理
     syncIconDeleteBoxes(!!it.icon32, !!it.icon128);
@@ -1620,8 +1606,6 @@
       '<div style="margin:8px 0">' +
       '<button id="mb-ce-fill">填入本页</button>' +
       '<button id="mb-ce-run">填入并提交</button>' +
-      '<button id="mb-ce-auto">连续执行</button>' +
-      '<button id="mb-ce-stop">停止</button>' +
       '<button id="mb-ce-diag">诊断</button>' +
       '<button id="mb-ce-import">导入 JSON…</button>' +
       '<input type="file" id="mb-ce-file" accept=".json" style="display:none">' +
@@ -1634,37 +1618,16 @@
     const info = (s) => { const e = document.getElementById('mb-ce-info'); if (e) e.textContent = s; };
     const out = (s) => { const e = document.getElementById('mb-ce-out'); if (e) e.textContent = s; };
 
-    // 整份 JSON 存在一个全局键里，翻页后仍在；当前页按 classId 取对应条目
-    const KEY = 'mcmod-class-edit-plan';
-    let planList = [];
+    const KEY = 'mcmod-class-edit-' + classId;
     let row = null;
-
-    function loadPlanList() {
-      try {
-        const raw = sessionStorage.getItem(KEY);
-        if (raw) {
-          const d = JSON.parse(raw);
-          planList = (d && d.items) || (Array.isArray(d) ? d : []);
-        }
-      } catch (e) { planList = []; }
-      // 也兼容 /class/edit 之外导入的说明：有些流程把条目塞进通用编辑计划
-      if (!planList.length) {
-        const gen = loadEditPlan();
-        if (gen && gen.items && gen.items.length) planList = gen.items;
-      }
-    }
-
-    function pickByClassId() {
-      return planList.find((x) => String(x.classId || x.id || '') === String(classId)) || null;
-    }
-
-    loadPlanList();
-    row = pickByClassId();
+    try {
+      const raw = sessionStorage.getItem(KEY);
+      if (raw) row = JSON.parse(raw);
+    } catch (e) { /* 忽略 */ }
 
     function refresh() {
       if (!row) {
-        info('当前模组 classId=' + classId + '，队列里没有对应条目（队列共 ' + planList.length +
-             ' 条）。点「导入 JSON…」选再编辑 JSON。');
+        info('当前模组 classId=' + classId + '，还没有载入正文。点「导入 JSON…」选再编辑 JSON。');
         return;
       }
       const h1 = (row.html.match(/\[h1=/g) || []).length;
@@ -1693,17 +1656,16 @@
           const raw = JSON.parse(rd.result);
           const hit = pickFromJson(raw);
           if (!hit || hit.html === undefined) return info('这份 JSON 里没有 html 字段');
-          const listRaw = raw.items || raw;
-          planList = Array.isArray(listRaw) ? listRaw : [listRaw];
-          sessionStorage.setItem(KEY, JSON.stringify({ items: planList, classId: classId }));
-          row = pickByClassId();
-          if (!row) {
-            row = { classId: Number(classId), name: hit.name || '', html: hit.html,
-                    editRemark: hit.editRemark || '', editNote: hit.editNote || '' };
-          }
+          row = {
+            classId: Number(classId),
+            name: hit.name || '',
+            html: hit.html,
+            editRemark: hit.editRemark || '',
+            editNote: hit.editNote || '',
+          };
+          sessionStorage.setItem(KEY, JSON.stringify(row));
           refresh();
-          out('已载入 ' + planList.length + ' 条，当前页匹配「' + (row.name || classId) +
-              '」，点「填入本页」写入编辑器');
+          out('已载入「' + (row.name || classId) + '」，点「填入本页」写入编辑器');
         } catch (err) {
           info('导入失败：' + err.message);
         }
@@ -1723,63 +1685,19 @@
       return true;
     }
 
-    // ---------- 队列状态（autoRun / paused 与 items 同一个键） ----------
-    function curIndex() {
-      return planList.findIndex((x) => String(x.classId || x.id || '') === String(classId));
-    }
-    function loadFlags() {
-      try {
-        const d = JSON.parse(sessionStorage.getItem(KEY) || '{}');
-        return { autoRun: !!d.autoRun, paused: !!d.paused };
-      } catch (e) { return { autoRun: false, paused: false }; }
-    }
-    function saveFlags(patch) {
-      const d = Object.assign({ items: planList }, loadFlags(), patch);
-      sessionStorage.setItem(KEY, JSON.stringify(d));
-    }
+    document.getElementById('mb-ce-fill').addEventListener('click', () => { doFill(); });
 
-    function advance() {
-      const i = curIndex();
-      const next = (i >= 0 && i + 1 < planList.length) ? planList[i + 1] : null;
-      if (!next) {
-        saveFlags({ autoRun: false });
-        info('队列完成，共 ' + planList.length + ' 条');
-        return;
-      }
-      const url = next.targetUrl || ('/class/edit/' + next.classId + '/');
-      info('第 ' + (i + 2) + '/' + planList.length + ' 条：' + (next.name || next.classId) + '，跳转中…');
-      setTimeout(() => { location.href = url; }, 700);
-    }
-
-    async function submitAndNext() {
-      if (!doFill()) { saveFlags({ paused: true }); return; }
-      await sleep(300);
+    document.getElementById('mb-ce-run').addEventListener('click', async () => {
+      if (!doFill()) return;
       info('正在提交…');
       const btn = findSubmitButton();
-      if (!btn) { saveFlags({ paused: true }); return info('找不到提交按钮，已暂停'); }
+      if (!btn) return info('找不到提交按钮，请手动提交');
       btn.click();
       await sleep(2600);
       const ok = findConfirmAny();
-      if (!ok) { saveFlags({ paused: true }); return info('没等到确认按钮，已暂停（手动点确认后可继续）'); }
+      if (!ok) return info('没等到确认按钮，请手动点确认');
       ok.click();
-      info('已确认「' + (ok.innerText || '').trim().slice(0, 8) + '」，等页面跳转…');
-      await sleep(2800);
-      advance();
-    }
-
-    document.getElementById('mb-ce-fill').addEventListener('click', () => { doFill(); });
-    document.getElementById('mb-ce-run').addEventListener('click', () => { submitAndNext(); });
-
-    document.getElementById('mb-ce-auto').addEventListener('click', () => {
-      if (!row) return info('还没载入正文');
-      saveFlags({ autoRun: true, paused: false });
-      info('连续执行已开启：' + (curIndex() + 1) + '/' + planList.length);
-      submitAndNext();
-    });
-
-    document.getElementById('mb-ce-stop').addEventListener('click', () => {
-      saveFlags({ autoRun: false, paused: true });
-      info('已停止（队列保留，可再点「连续执行」继续）');
+      info('已点确认「' + (ok.innerText || '').trim().slice(0, 8) + '」');
     });
 
     document.getElementById('mb-ce-diag').addEventListener('click', () => {
@@ -1809,13 +1727,6 @@
     });
 
     refresh();
-
-    // 连续模式下，进页面 2 秒后自动开填（留点时间让编辑器初始化）
-    const flags = loadFlags();
-    if (flags.autoRun && !flags.paused && row) {
-      info('连续模式：第 ' + (curIndex() + 1) + '/' + planList.length + ' 条，2 秒后自动执行…');
-      setTimeout(() => { submitAndNext(); }, 2000);
-    }
   }
 
   function initAddQueueRunner(verifyId) {
