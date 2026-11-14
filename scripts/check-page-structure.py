@@ -71,6 +71,24 @@ def main() -> int:
         if op != cl:
             problems.append(f"标签不平衡：<{tag}> {op} 个，</{tag}> {cl} 个")
 
+    # 4.5 列表标点（审核附言 2026-11-14：各项「；」，末项「。」）
+    lis = re.findall(r"<li[^>]*>(.*?)</li>", t, re.S)
+    if lis:
+        for i, inner in enumerate(lis, 1):
+            plain_li = re.sub(r"<[^>]+>", "", inner).strip()
+            if not plain_li:
+                continue
+            last = plain_li[-1]
+            is_last_item = (i == len(lis))
+            if is_last_item and last != "。":
+                problems.append(
+                    f"列表末项应以「。」结尾，实际是「{last}」：{plain_li[:24]}…"
+                    "（rules/01 §2.1.2）")
+            elif not is_last_item and last != "；":
+                problems.append(
+                    f"列表非末项应以「；」结尾，实际是「{last}」：{plain_li[:24]}…"
+                    "（rules/01 §2.1.2）")
+
     # 5. ban 与标题
     has_ban = "[ban:title_menu]" in t
     if heads and has_ban:
