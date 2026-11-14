@@ -207,7 +207,9 @@ def _start_local_server(game: Path, version: str, java: str, tool_modid: str = "
 def _supports_quickplay(version: str) -> bool:
     """--quickPlaySingleplayer 是 1.20 引入的。"""
     import re
-    m = re.match(r"1\.(\d+)", version)
+    # 版本目录名不一定以版本号开头（PCL 里可能叫「主端1.21.1」「客户端1.20.1」），
+    # 用 search 而不是 match，否则这些版本会被误判成"不支持 quickPlay"（踩过）
+    m = re.search(r"1\.(\d+)", version)
     if not m:
         return False
     return int(m.group(1)) >= 20
@@ -616,6 +618,8 @@ def main() -> int:
         if extra:
             print(f"      注入 -D 参数: {' '.join(extra)}")
     argv = argv[:mi] + [agent_arg] + extra + argv[mi:]
+    if a.console:
+        print(f"      最终 argv JVM 段: {argv[1:mi+len(extra)+1]}")
     # 1.20+ 才有 quickPlay：直接进世界，跳过主菜单
     server_proc = None
     if _supports_quickplay(a.version):
