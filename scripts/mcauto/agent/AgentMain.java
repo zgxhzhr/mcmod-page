@@ -40,6 +40,9 @@ import java.util.Map;
 public final class AgentMain {
 
     private static Class<?> mcClass;
+    /** premain 解析出来的 -javaagent 参数，供其它方法读 */
+    private static final java.util.Map<String, String> PARAMS = new java.util.HashMap<>();
+    private static final long[] launchedWorld = new long[1];
 
     private static final long POLL_MS = 500;
     private static Instrumentation INST;
@@ -67,6 +70,7 @@ public final class AgentMain {
         final String mode = cfg.getOrDefault("mode", "lms");
         final Path gameDir = Paths.get(System.getProperty("user.dir"));
         log("premain mode=" + mode + " timeout=" + timeoutMs + "ms cwd=" + gameDir);
+        PARAMS.putAll(cfg);
 
         Thread t = new Thread(() -> {
             try {
@@ -80,6 +84,36 @@ public final class AgentMain {
         t.start();
     }
 
+    /** 把「载入存档」也投到渲染线程（launchIntegratedServer 会碰 GL） */
+    private static void tryLaunchOnMainThread(Class<?> mcClass, Object mc, String worldName) {
+        try {
+            Method queue = null;
+            for (String want : new String[]{"execute", "m_18707_", "method_18856", "func_213187_a"}) {
+                for (Method m : mc.getClass().getMethods()) {
+                    if (m.getName().equals(want) && m.getParameterCount() == 1
+                            && m.getParameterTypes()[0] == Runnable.class) {
+                        queue = m;
+                        break;
+                    }
+                }
+                if (queue != null) {
+                    break;
+                }
+            }
+            final Object inst = mc;
+            final String wn = worldName;
+            if (queue == null) {
+                log("找不到 execute(Runnable)，直接载入存档");
+                launchWorld(inst, wn);
+                return;
+            }
+            final Method q = queue;
+            q.invoke(mc, (Runnable) () -> launchWorld(inst, wn));
+        } catch (Throwable e) {
+            log("载入存档失败: " + e);
+        }
+    }
+
     private static void waitWorldThenExport(String mode, Path gameDir, long timeoutMs) throws Exception {
         long start = System.currentTimeMillis();
         Class<?> mcClass = null;
@@ -90,6 +124,14 @@ public final class AgentMain {
         // 类转换，而它那时还加载不了 org...ScreenEvent，结果抛错并把游戏卡成未响应。
         // 所以先等「世界类已加载」，说明客户端已经跑起来、Forge 转换器也初始化完了。
         while (System.currentTimeMillis() - start < timeoutMs) {
+            // 混淆命名版本（1.16.5 及更早 Forge）找不到类名，
+            // 但 Forge 的 FMLClientHandler 不混淆，能直接给出实例。
+            Object viaFml = mcViaFmlHandler();
+            if (viaFml != null) {
+                mcClass = viaFml.getClass();
+                log("经 FMLClientHandler 拿到客户端类: " + mcClass.getName());
+                break;
+            }
             mcClass = findClassAny("net.minecraft.client.Minecraft",
                     "net.minecraft.client.MinecraftClient",
                     "net.minecraft.class_310");
@@ -100,6 +142,14 @@ public final class AgentMain {
                 break;
             }
             Thread.sleep(POLL_MS);
+        }
+        if (mcClass == null) {
+            // 混淆命名版本：Forge 类名不混淆，借 FMLClientHandler 拿实例再反推类
+            Object viaFml = mcViaFmlHandler();
+            if (viaFml != null) {
+                mcClass = viaFml.getClass();
+                log("经 FMLClientHandler 拿到客户端实例，类=" + mcClass.getName());
+            }
         }
         AgentMain.mcClass = mcClass;
         if (mcClass == null) {
@@ -114,6 +164,14 @@ public final class AgentMain {
                 Object mc = null;
                 try {
                     mc = mcInstance(mcClass);
+                    // 老版本没有 quickPlay：等几秒还没有世界，就自己载入本地存档
+                    String wantWorld = PARAMS.getOrDefault("world",
+                            System.getProperty("mcauto.world", ""));
+                    if (!wantWorld.isEmpty() && launchedWorld[0] == 0
+                            && System.currentTimeMillis() - start > 15000) {
+                        launchedWorld[0] = System.currentTimeMillis();
+                        tryLaunchOnMainThread(mcClass, mc, wantWorld);
+                    }
                 } catch (Throwable e) {
                     log("反射暂不可用（" + e.getClass().getSimpleName() + "），1 秒后重试");
                     Thread.sleep(1000);
@@ -121,7 +179,13 @@ public final class AgentMain {
                 }
                 if (mc != null) {
                     Object level = fieldByType(mc, LEVEL_TYPES);
+                    if (level == null) {
+                        level = fieldByNames(mc, new String[]{"field_71441_e", "field_71308_aa", "world"});
+                    }
                     Object player = fieldByType(mc, PLAYER_TYPES);
+                    if (player == null) {
+                        player = fieldByNames(mc, new String[]{"field_71439_g", "field_71438_f", "player"});
+                    }
                     if (level != null && player != null) {
                         log("已进世界，3 秒后开始导出");
                         Thread.sleep(3000);
@@ -502,6 +566,39 @@ public final class AgentMain {
     }
 
     /**
+     * 让客户端自己加载本地单人存档（老版本没有 --quickPlaySingleplayer）。
+     *
+     * 1.12.2 / 1.7.10 的 Minecraft 都有
+     *   launchIntegratedServer(String folder, String worldName, WorldSettings settings)
+     * 直接调用就能进世界，比另起一个专用服务端 + --server 简单得多
+     * （1.12.2 的 Forge 服务端还要单独装，坑很深）。
+     */
+    private static boolean launchWorld(Object mc, String worldName) {
+        for (Method m : mc.getClass().getMethods()) {
+            if (!m.getName().toLowerCase().contains("launchintegratedserver")) {
+                continue;
+            }
+            Class<?>[] ps = m.getParameterTypes();
+            try {
+                if (ps.length == 3 && ps[0] == String.class && ps[1] == String.class) {
+                    log("调用 launchIntegratedServer(" + worldName + ")");
+                    m.invoke(mc, worldName, worldName, null);
+                    return true;
+                }
+                if (ps.length == 2 && ps[0] == String.class && ps[1] == String.class) {
+                    log("调用 launchIntegratedServer(" + worldName + ") [2 参]");
+                    m.invoke(mc, worldName, worldName);
+                    return true;
+                }
+            } catch (Throwable e) {
+                log("launchIntegratedServer 失败: " + e);
+            }
+        }
+        log("没找到 launchIntegratedServer 方法");
+        return false;
+    }
+
+    /**
      * 直接构造工具的导出类（Forge/Fabric 的包名不同，两个都试）。
      * FileHelper(String modId) 构造函数里就完成 收集 → 渲染 → 写文件 的全流程。
      */
@@ -537,41 +634,72 @@ public final class AgentMain {
      * 产物：当前目录下 export/<modid>_item.json（一次性导出所有模组，按命名空间分文件）
      */
     private static void irrExport() throws Exception {
-        // 先把物品列表刷新出来
-        Class<?> listCls = findClass("itemrender.client.export.ItemList");
-        if (listCls != null) {
+        // IRR 有两代 API，类名都是不混淆的（mod 自己的类不受 MC 混淆影响）：
+        //   1.x 老版 (1.7.10 / 1.12.2): itemrender.client.export.ExportUtils#exportMods()
+        //                               + ItemList.updateList()
+        //   2.x 新版 (1.16.x)        : cn.mcmod.item_render.export.ExportMain#getInstance()
+        //                               + DoExport()
+        boolean done = false;
+
+        // ── 新版 1.16.x ──
+        Class<?> em = findClass("cn.mcmod.item_render.export.ExportMain");
+        if (em != null) {
+            Object inst = null;
             try {
-                Method upd = listCls.getMethod("updateList");
-                upd.invoke(null);
-                log("ItemList.updateList() 完成");
-            } catch (Throwable e) {
-                log("ItemList.updateList() 失败: " + e);
+                Method gi = em.getMethod("getInstance");
+                inst = gi.invoke(null);
+            } catch (Throwable ignored) {
             }
-        } else {
-            log("警告：找不到 ItemList");
+            if (inst == null) {
+                try {
+                    java.lang.reflect.Constructor<?> c = em.getDeclaredConstructor();
+                    c.setAccessible(true);
+                    inst = c.newInstance();
+                } catch (Throwable ignored) {
+                }
+            }
+            if (inst != null) {
+                Method m = em.getMethod("DoExport");
+                log("调用 ExportMain#DoExport()");
+                try {
+                    m.invoke(inst);
+                    done = true;
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    log("DoExport 抛出: " + e.getCause());
+                    done = true;   // 已经执行过了，不再走老 API
+                }
+            }
         }
 
-        Class<?> eu = findClass("itemrender.client.export.ExportUtils");
-        if (eu == null) {
-            throw new IllegalStateException("找不到 ExportUtils，IRR 没装或版本不符");
-        }
-        Object inst = null;
-        try {
-            java.lang.reflect.Field f = eu.getField("INSTANCE");
-            inst = f.get(null);
-        } catch (Throwable ignored) {
-        }
-        if (inst == null) {
-            inst = eu.getConstructor().newInstance();
-            log("ExportUtils.INSTANCE 为空，自己 new 了一个");
-        }
-        Method m = eu.getMethod("exportMods");
-        log("调用 ExportUtils#exportMods()");
-        try {
-            m.invoke(inst);
-        } catch (java.lang.reflect.InvocationTargetException e) {
-            // 1.7.10 上它可能抛 IOException 之外的，照记不中断
-            log("exportMods 抛出: " + e.getCause());
+        // ── 老版 1.7.10 / 1.12.2 ──
+        if (!done) {
+            Class<?> listCls = findClass("itemrender.client.export.ItemList");
+            if (listCls != null) {
+                try {
+                    listCls.getMethod("updateList").invoke(null);
+                    log("ItemList.updateList() 完成");
+                } catch (Throwable e) {
+                    log("ItemList.updateList() 失败: " + e);
+                }
+            }
+            Class<?> eu = findClass("itemrender.client.export.ExportUtils");
+            if (eu == null) {
+                throw new IllegalStateException("找不到 IRR 的导出类（两代 API 都没有）");
+            }
+            Object inst = null;
+            try {
+                inst = eu.getField("INSTANCE").get(null);
+            } catch (Throwable ignored) {
+            }
+            if (inst == null) {
+                inst = eu.getConstructor().newInstance();
+            }
+            log("调用 ExportUtils#exportMods()");
+            try {
+                eu.getMethod("exportMods").invoke(inst);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                log("exportMods 抛出: " + e.getCause());
+            }
         }
         log("IRR 导出调用结束");
     }
@@ -661,7 +789,48 @@ public final class AgentMain {
     }
 
     /** 返回类型是 mcClass 的无参静态方法 = getInstance() */
+    /**
+     * 通过 Forge 的 FMLClientHandler 拿 Minecraft 实例。
+     *
+     * 1.16.5 及更早的 Forge 运行时类名是**混淆**的（Minecraft 叫 bib / dbg …），
+     * 按 mojmap 名字永远找不到。但 Forge 自己的类名不混淆，而且
+     *   net.minecraftforge.fml.client.FMLClientHandler.instance().getClient()
+     * 直接返回那个实例，不需要知道它叫什么。
+     */
+    private static Object mcViaFmlHandler() {
+        try {
+            Class<?> h = findClass("net.minecraftforge.fml.client.FMLClientHandler");
+            if (h == null) {
+                return null;
+            }
+            Object inst = null;
+            for (Method m : h.getMethods()) {
+                if (m.getParameterCount() == 0 && m.getName().equalsIgnoreCase("instance")) {
+                    inst = m.invoke(null);
+                    break;
+                }
+            }
+            if (inst == null) {
+                return null;
+            }
+            for (Method m : inst.getClass().getMethods()) {
+                if (m.getParameterCount() == 0
+                        && m.getName().toLowerCase().contains("getclient")
+                        && !m.getReturnType().isPrimitive()) {
+                    return m.invoke(inst);
+                }
+            }
+        } catch (Throwable e) {
+            log("FMLClientHandler 取 client 失败: " + e);
+        }
+        return null;
+    }
+
     private static Object mcInstance(Class<?> mcClass) {
+        if (mcClass == null) {
+            // 混淆命名版本（1.16.5 及更早的 Forge）拿不到类名，走 Forge 的 handler
+            return mcViaFmlHandler();
+        }
         for (Method m : mcClass.getDeclaredMethods()) {
             if (!Modifier.isStatic(m.getModifiers()) || m.getParameterCount() != 0) {
                 continue;
@@ -679,6 +848,32 @@ public final class AgentMain {
     }
 
     /** 按字段类型名匹配（支持继承链），不看字段名 */
+    /** 按字段名取（1.16.5 及更早用 SRG 名：world=field_71441_e，player=field_71439_g） */
+    private static Object fieldByNames(Object obj, String[] names) {
+        if (obj == null) {
+            return null;
+        }
+        Class<?> k = obj.getClass();
+        while (k != null && k != Object.class) {
+            for (java.lang.reflect.Field f : k.getDeclaredFields()) {
+                for (String n : names) {
+                    if (f.getName().equals(n)) {
+                        try {
+                            f.setAccessible(true);
+                            Object v = f.get(obj);
+                            if (v != null) {
+                                return v;
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            }
+            k = k.getSuperclass();
+        }
+        return null;
+    }
+
     private static Object fieldByType(Object obj, String[] typeNames) {
         if (obj == null) {
             return null;

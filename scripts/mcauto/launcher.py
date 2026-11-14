@@ -282,8 +282,18 @@ def resolve_version_json(mc_dir: Path, version: str) -> tuple[dict, Path | None]
             merged[k] = child[k]
     libs = list(parent.get("libraries") or [])
     child_libs = child.get("libraries") or []
-    names_child = {l.get("name") for l in child_libs}
-    libs = [l for l in libs if l.get("name") not in names_child] + child_libs
+
+    def ga(lib: dict) -> str:
+        """group:artifact（忽略版本与分类器），用来判断是不是同一个库"""
+        parts = (lib.get("name") or "").split(":")
+        return ":".join(parts[:2]) if len(parts) >= 2 else (lib.get("name") or "")
+
+    # 父版本和子版本可能各带一份**不同版本**的同名库（典型：log4j）。
+    # 只按完整 name 去重会两份都留着，结果 classpath 上出现两个版本，
+    # Forge 1.16.5 就报 NoSuchMethodError: ThrowablePatternConverter.<init>。
+    # 所以按 group:artifact 去重，子版本优先。
+    child_ga = {ga(l) for l in child_libs}
+    libs = [l for l in libs if ga(l) not in child_ga] + child_libs
     merged["libraries"] = libs
 
     pa = parent.get("arguments") or {}

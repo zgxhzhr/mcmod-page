@@ -358,7 +358,9 @@ def agent_jar_for(version: str) -> Path:
     m = re.search(r"(\d+)\.(\d+)", version)
     if m:
         major, minor = int(m.group(1)), int(m.group(2))
-        if major == 1 and minor <= 12:
+        # 1.16 及更早都跑在 JDK 8 上（find_java 也是这么选的），
+        # agent 必须同为 class 52，否则 UnsupportedClassVersionError。
+        if major == 1 and minor <= 16:
             return AGENT8
     return AGENT
 
@@ -488,6 +490,14 @@ def main() -> int:
         print(f"      无覆盖目录（{ov_src}）")
 
     export_dir = work / "out"
+    # 1.12.2 及更早：没有 quickPlay，也不方便起 Forge 服务端，
+    # 直接让 agent 调 launchIntegratedServer 载入本地存档。
+    import re as _re
+    _mm = _re.search(r"(\d+)\.(\d+)", a.version)
+    legacy_world = bool(_mm) and int(_mm.group(1)) == 1 and int(_mm.group(2)) <= 12
+    if legacy_world:
+        print("      老版本：由 agent 自己载入本地存档（不走服务端）")
+
     print(f"[2/4] 组装命令行（agent mode={a.mode}，输出目录 {export_dir}）")
     sys_path = str(HERE)
     import sys
@@ -503,9 +513,13 @@ def main() -> int:
         chosen_agent = agent_jar_for(a.version)
         if not chosen_agent.exists():
             raise SystemExit(f"缺 agent：{chosen_agent}，先跑 build_agent.py")
-        agent_arg = (f"-javaagent:{chosen_agent}=mode={a.mode},timeout={a.timeout},"
+        _wa = ",world=mcauto" if legacy_world else ""
+        agent_arg = (f"-javaagent:{chosen_agent}=mode={a.mode},timeout={a.timeout}{_wa},"
                      f"gameDir={game}")
         extra = []
+    if legacy_world and not a.self_trigger:
+        extra = list(extra) + ["-Dmcauto.world=mcauto"]
+
     argv = launcher.build(
         Path(a.mc_dir), a.version, game, a.username,
         launcher.find_java(a.version),
@@ -528,7 +542,7 @@ def main() -> int:
     else:
         # 1.20 以下没有 quickPlay：起本地服务端，客户端连进去
         _tool_modid = TOOL_INFO.get(a.mode, {}).get("modid", "")
-        server_proc = _start_local_server(game, a.version,
+        server_proc = None if legacy_world else _start_local_server(game, a.version,
                                           launcher.find_java(a.version).replace("javaw", "java"),
                                           _tool_modid)
         if server_proc is None:
