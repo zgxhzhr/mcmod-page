@@ -1,0 +1,112 @@
+[
+ {
+  "file": "IconRenderer-Fabric-2.0.1-mc1.20.1.jar",
+  "mb": 0.03,
+  "kind": "fabric",
+  "modid": "iconr",
+  "ver": "2.0.1-mc1.20.1",
+  "mc": "1.20.1",
+  "mc_from_name": "1.20.1.",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IconRenderer-Fabric-2.0.1-mc1.20.1.jar"
+ },
+ {
+  "file": "IconRenderer-Forge-1.0.2-1.19.2.jar",
+  "mb": 0.02,
+  "kind": "forge",
+  "modid": "iconr",
+  "ver": "1.0.2-1.19.2",
+  "mc": "1.19.2",
+  "mc_from_name": "",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IconRenderer-Forge-1.0.2-1.19.2.jar"
+ },
+ {
+  "file": "IconRenderer-Forge-1.20.1-1.2.0.jar",
+  "mb": 0.02,
+  "kind": "forge",
+  "modid": "iconr",
+  "ver": "1.2.0",
+  "mc": "1.20.1",
+  "mc_from_name": "",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IconRenderer-Forge-1.20.1-1.2.0.jar"
+ },
+ {
+  "file": "IRR-1.0-1.16.1.jar",
+  "mb": 0.02,
+  "kind": "forge",
+  "modid": "item_render_rebirth",
+  "ver": "${file.jarVersion}",
+  "mc": "1.16.1",
+  "mc_from_name": "",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IRR-1.0-1.16.1.jar"
+ },
+ {
+  "file": "IRR-1.0-1.16.2.jar",
+  "mb": 0.02,
+  "kind": "forge",
+  "modid": "item_render_rebirth",
+  "ver": "${file.jarVersion}",
+  "mc": "1.16.2",
+  "mc_from_name": "",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IRR-1.0-1.16.2.jar"
+ },
+ {
+  "file": "IRR-1.0-1.16.X (1).jar",
+  "mb": 0.02,
+  "kind": "forge",
+  "modid": "item_render_rebirth",
+  "ver": "${file.jarVersion}",
+  "mc": "1.16.2~1.17",
+  "mc_from_name": "",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IRR-1.0-1.16.X (1).jar"
+ },
+ {
+  "file": "IRR-1.0-1.16.X.jar",
+  "mb": 0.02,
+  "kind": "forge",
+  "modid": "item_render_rebirth",
+  "ver": "${file.jarVersion}",
+  "mc": "1.16.2~1.17",
+  "mc_from_name": "",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IRR-1.0-1.16.X.jar"
+ },
+ {
+  "file": "IRR_V1.1.0_MC1.12.2.jar",
+  "mb": 0.03,
+  "kind": "?",
+  "modid": "",
+  "ver": "",
+  "mc": "1.12.2",
+  "mc_from_name": "1.12.2.",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IRR_V1.1.0_MC1.12.2.jar"
+ },
+ {
+  "file": "IRR_V1.1.0_MC1.7.10.jar",
+  "mb": 0.03,
+  "kind": "?",
+  "modid": "",
+  "ver": "",
+  "mc": "1.7.10",
+  "mc_from_name": "1.7.10.",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\IRR_V1.1.0_MC1.7.10.jar"
+ },
+ {
+  "file": "LetMeSeeSee-NeoForge-Minecraft1.21.1-1.0.7.jar",
+  "mb": 0.19,
+  "kind": "neoforge",
+  "modid": "let_me_see_see",
+  "ver": "1.0.7",
+  "mc": "1.21.1",
+  "mc_from_name": "",
+  "self_trigger": false,
+  "copied_to": "C:\\Users\\MKIII\\.dsh\\skills\\mcmod-page\\tools\\exporter\\LetMeSeeSee-NeoForge-Minecraft1.21.1-1.0.7.jar"
+ }
+]
