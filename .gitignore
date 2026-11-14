@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 *.tmp.md
 _diff/
+
+# 构建中间产物（agent jar 由 build_agent.py 生成后保留，编译类不留）
+scripts/mcauto/agent-build/
+*.class

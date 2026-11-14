@@ -222,6 +222,18 @@ javac -encoding UTF-8 -cp forge-1.7.10-universal.jar -d classes src\mcauto\*.jav
 - **1.16.5**：连接界面类名是 **`ConnectingScreen`**，不是 `ConnectScreen`；
   `TitleScreen` 在 1.16.5 叫 `MainMenuScreen`（父界面传 `null` 即可）。
 
+### 7.1.1 agent jar（构建产物，可复现）
+
+`mcauto-agent.jar`（class 61，1.17+）与 `mcauto-agent8.jar`（`--release 8`，≤1.16）
+**不是手写产物**，由下面这条命令生成（源码在 `scripts/mcauto/agent/AgentMain.java`）：
+
+```powershell
+python scripts\mcauto\build_agent.py
+```
+
+中间产物 `agent-build/`（`.class` 与 `MANIFEST.MF`）已在 `.gitignore` 里，
+不进版本库；两个 jar 保留在版本库里，方便直接用，也可以随时重建。
+
 ### 7.2 两个上游 fork（补构建配置 / 加自动化入口）
 
 | fork | 分支 | 我们改了什么 |
