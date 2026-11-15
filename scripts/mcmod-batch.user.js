@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.46
+// @version      2.47
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -21,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.46';
+  const MB_VERSION = '2.47';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -1539,32 +1539,85 @@
     }
 
     /** 点掉站点的「撤回确认 / 确定要撤回此项提交吗？」弹窗。
-     *  - 站点用的是 layui 风格弹窗：按钮是 .layui-layer-btn0（绿底「确定」），
-     *    不是普通 <button>，按文字找容易漏；这里优先按 class 找，再按容器内文字兜底。
-     *  - 弹窗可能在 iframe 里，所以遍历同源 iframe 的 document。
+     *  实测要点（2026-11-15）：
+     *   - 按钮常常不是 <button>，而是 <a>/<div>，并且监听 mousedown/pointerdown，
+     *     光调 el.click() 不触发，必须依次派发 pointerdown → mousedown → pointerup → mouseup → click。
+     *   - 弹窗可能在 iframe 里，遍历同源 iframe 的 document。
+     *   - 兜底：全屏找可见且文字为「确定/确认」的元素（排除我们自己的面板）。
      */
+    function fireClick(el) {
+      try {
+        const r = el.getBoundingClientRect();
+        const opt = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+        el.dispatchEvent(new PointerEvent('pointerdown', opt));
+        el.dispatchEvent(new MouseEvent('mousedown', opt));
+        el.dispatchEvent(new PointerEvent('pointerup', opt));
+        el.dispatchEvent(new MouseEvent('mouseup', opt));
+        el.dispatchEvent(new MouseEvent('click', opt));
+        if (typeof el.click === 'function') el.click();
+        return true;
+      } catch (e) { return false; }
+    }
+
+    function collectDocs() {
+      const docs = [document];
+      document.querySelectorAll('iframe').forEach((f) => {
+        try { if (f.contentDocument) docs.push(f.contentDocument); } catch (e) { /* 跨域跳过 */ }
+      });
+      return docs;
+    }
+
+    function visible(el) {
+      const r = el.getBoundingClientRect();
+      if (!(r.width > 2 && r.height > 2)) return false;
+      const st = doc3(el).defaultView.getComputedStyle(el);
+      return st.visibility !== 'hidden' && st.display !== 'none' && Number(st.opacity) !== 0;
+    }
+
+    function doc3(el) { return el.ownerDocument || document; }
+
+    function findConfirmButton(doc) {
+      const panel = doc.getElementById('mb-verify-panel');
+      const okText = (t) => /^(确定|确认|是)$/.test(String(t || '').replace(/\s/g, ''));
+      // 1) 站点常见 class
+      const byClass = doc.querySelectorAll('.layui-layer-btn0, .swal2-confirm, .el-button--primary, .btn-primary');
+      for (const el of byClass) {
+        if (panel && panel.contains(el)) continue;
+        if (!visible(el)) continue;
+        if (/取消|cancel/i.test(el.innerText || '')) continue;
+        return el;
+      }
+      // 2) 全屏文字兜底
+      const all = doc.querySelectorAll('button, a, div, span, input[type=button], input[type=submit]');
+      for (const el of all) {
+        if (panel && panel.contains(el)) continue;
+        if (el.children.length > 2) continue;              // 只要叶子级元素
+        const txt = (el.innerText || el.value || '').trim();
+        if (!okText(txt)) continue;
+        if (!visible(el)) continue;
+        return el;
+      }
+      return null;
+    }
+
     async function clickRetireConfirm(maxMs) {
       const t0 = Date.now();
       const limit = maxMs || 3000;
+      let lastDiag = '';
       while (Date.now() - t0 < limit) {
-        for (const doc of deepDocs()) {
-          const dialog = [...doc.querySelectorAll('.layui-layer, .layui-layer-dialog, .modal, [class*="dialog"], [class*="confirm"]')]
-            .find((el) => /撤回确认|确定要撤回/.test(el.innerText || ''));
-          if (dialog) {
-            const btn = [...dialog.querySelectorAll('button,a,span,div,input[type=button]')]
-              .find((el) => {
-                const txt = (el.innerText || el.value || '').replace(/\s/g, '');
-                const cls = (el.className || '').toString();
-                if (/layui-layer-btn0/.test(cls)) return true;
-                return /^(确定|确认)$/.test(txt) && cls.indexOf('layui-layer-btn1') < 0;
-              });
-            if (btn) { btn.click(); return true; }
+        for (const doc of collectDocs()) {
+          const btn = findConfirmButton(doc);
+          if (btn) {
+            const ok = fireClick(btn);
+            if (ok) return true;
           }
-          const lay = doc.querySelector('.layui-layer-btn0');
-          if (lay) { lay.click(); return true; }
+          const dlg = [...doc.querySelectorAll('.layui-layer, [class*="dialog"], [class*="confirm"], [class*="modal"]')]
+            .find((el) => /撤回确认|确定要撤回/.test(el.innerText || ''));
+          if (dlg) lastDiag = dlg.outerHTML.slice(0, 300);
         }
         await sleep(100);
       }
+      if (lastDiag) info('没点到撤回确认按钮，弹窗结构片段：' + lastDiag);
       return false;
     }
 
