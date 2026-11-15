@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.42
+// @version      2.43
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -21,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.42';
+  const MB_VERSION = '2.43';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -1338,8 +1338,11 @@
       const status = sMatch ? sMatch[0] : '';
       const timeCell = tds[2] ? (tds[2].innerText || '').trim() : '';
 
+      const modM = txt.match(/在模组\s*([^\s|]+)\s*(?:中|里)/);
+      const mod = modM ? modM[1] : '';
+
       return {
-        index: index + 1, kind, id, verifyId, status, name, kindLabel,
+        index: index + 1, kind, id, verifyId, status, name, kindLabel, mod,
         time: timeCell.replace(/\s+/g, ' ').slice(0, 30),
         hasRetire: !!retireEl, hasAgain: !!againEl, againHref,
         isItem: !!id,
@@ -1376,6 +1379,10 @@
       '<button id="mb-verify-dl">导出 JSON</button>' +
       '<button id="mb-verify-diag">诊断</button>' +
       '<button id="mb-verify-batchretire" style="background:#b91c1c !important;border-color:#991b1b !important">批量撤回</button>' +
+      '<button id="mb-verify-selretirable" style="background:#374151 !important;border-color:#1f2937 !important">全选可撤回</button>' +
+      '<button id="mb-verify-invert" style="background:#374151 !important;border-color:#1f2937 !important">反选</button>' +
+      '<select id="mb-verify-modfilter" style="margin:3px 0 3px 0;padding:5px 8px;border-radius:6px;border:1px solid #d1d5db;font-size:13px">' +
+      '<option value="">全部模组</option></select>' +
       '<button id="mb-verify-batchagain">批量打开编辑页</button>' +
       '<button id="mb-verify-plan" style="background:#0ea5e9 !important;border-color:#0284c7 !important">导入计划并自动再编辑</button>' +
       '<input type="file" id="mb-verify-planfile" accept=".json" style="display:none">' +
@@ -1395,19 +1402,35 @@
     function renderRows() {
       const box = document.getElementById('mb-verify-rows');
       const onlyRej = document.getElementById('mb-verify-onlyrej').checked;
-      const list = onlyRej
+      let list = onlyRej
         ? rows.filter((r) => r.status === '已退回' || r.status === '审核中')
         : rows;
+      const modSel = document.getElementById('mb-verify-modfilter');
+      const modWant = modSel ? modSel.value : '';
+      if (modWant) list = list.filter((r) => r.mod === modWant);
+      // 刷新模组下拉（保留当前选择）
+      if (modSel) {
+        const mods = [...new Set(rows.map((r) => r.mod).filter(Boolean))].sort();
+        const cur = modSel.value;
+        const opts = ['<option value="">全部模组</option>'].concat(
+          mods.map((m) => '<option value="' + m + '"' + (m === cur ? ' selected' : '') + '>' + m + '</option>'),
+        );
+        if (modSel.innerHTML !== opts.join('')) modSel.innerHTML = opts.join('');
+      }
       if (!list.length) { box.innerHTML = '<div style="color:#6b7280">（没有符合条件的条目）</div>'; return; }
       box.innerHTML = list.map((r) => {
         const color = r.status === '已退回' ? '#b91c1c' : (r.status === '审核中' ? '#b45309' : '#15803d');
+        const modTxt = r.mod ? ('<span style="color:#2563eb;font-weight:600">[' + r.mod + ']</span> ') : '';
         return '<div class="mb-vrow" data-i="' + r.index + '" style="display:flex;align-items:center;gap:6px;' +
-          'padding:4px 0;border-bottom:1px solid #eee;font-size:12.5px">' +
+          'padding:5px 0;border-bottom:1px solid #eee;font-size:12.5px;flex-wrap:wrap">' +
           '<input type="checkbox" class="mb-vsel" data-i="' + r.index + '" style="margin:0;vertical-align:middle">' +
-          '<span style="color:' + color + ';min-width:44px">' + (r.status || '?') + '</span>' +
+          '<span style="color:' + color + ';min-width:44px;font-weight:600">' + (r.status || '?') + '</span>' +
           '<span style="color:#6b7280;min-width:30px">' + r.kind + '</span>' +
-          '<span style="flex:1;color:#111827">' + (r.name || (r.id ? ('#' + r.id) : '(未识别)')) +
+          '<span style="flex:1;color:#111827;min-width:180px">' + modTxt +
+          (r.name || (r.id ? ('#' + r.id) : '(未识别)')) +
+          '<span style="color:#9ca3af;font-size:11px"> ' + (r.kindLabel || '') + '</span>' +
           (r.isItem ? '' : '<span style="color:#9ca3af;font-size:11px"> 非资料</span>') + '</span>' +
+          '<span style="color:#9ca3af;font-size:11px;min-width:74px">' + (r.time || '') + '</span>' +
           '<button data-act="again" data-i="' + r.index + '" style="padding:3px 8px !important;font-size:12px !important">再编辑</button>' +
           (r.hasRetire ? '<button data-act="retire" data-i="' + r.index + '" style="padding:3px 8px !important;font-size:12px !important;background:#b91c1c !important;border-color:#991b1b !important">撤回</button>' : '') +
           '</div>';
@@ -1445,22 +1468,70 @@
       document.querySelectorAll('.mb-vsel').forEach((c) => { c.checked = e.target.checked; });
     });
 
+    document.getElementById('mb-verify-selretirable').addEventListener('click', () => {
+      // 只勾「当前可见、且能撤回」的行
+      let n = 0;
+      document.querySelectorAll('.mb-vrow').forEach((div) => {
+        const i = div.getAttribute('data-i');
+        const r = rows.find((x) => String(x.index) === i);
+        const box = div.querySelector('.mb-vsel');
+        if (r && r.hasRetire) { box.checked = true; n += 1; } else { box.checked = false; }
+      });
+      info('已勾选可撤回 ' + n + ' 条');
+    });
+
+    document.getElementById('mb-verify-invert').addEventListener('click', () => {
+      document.querySelectorAll('.mb-vsel').forEach((c) => { c.checked = !c.checked; });
+    });
+
+    document.getElementById('mb-verify-modfilter').addEventListener('change', renderRows);
+
     function selectedRows() {
       const ids = [...document.querySelectorAll('.mb-vsel:checked')].map((c) => c.getAttribute('data-i'));
       return rows.filter((r) => ids.indexOf(String(r.index)) >= 0);
     }
 
+    /** 点掉站点的「确定要撤回此项提交吗？」弹窗。
+     *  弹窗按钮文字是「确定」，个别页面是「确认」；只点弹窗内部的按钮，
+     *  避免误触列表里的其它按钮。 */
+    async function clickRetireConfirm(maxMs) {
+      const t0 = Date.now();
+      const limit = maxMs || 5000;
+      while (Date.now() - t0 < limit) {
+        const cands = [...document.querySelectorAll('button,a,span,div')].filter((el) => {
+          const txt = (el.innerText || '').trim();
+          if (!/^(确定|确认|是|撤回)$/.test(txt)) return false;
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) return false;
+          // 必须在弹窗里：祖先含「撤回确认」或「确定要撤回」字样
+          let p = el;
+          for (let d = 0; d < 6 && p; d += 1, p = p.parentElement) {
+            const pt = (p.innerText || '');
+            if (/撤回确认|确定要撤回/.test(pt)) return true;
+          }
+          return false;
+        });
+        if (cands.length) { cands[0].click(); return true; }
+        await sleep(120);
+      }
+      return false;
+    }
+
     document.getElementById('mb-verify-batchretire').addEventListener('click', async () => {
       const sel = selectedRows().filter((r) => r._retire);
-      if (!sel.length) return info('没有选中「可撤回」的条目（先勾选左侧方框）');
-      if (!confirm('确认批量撤回 ' + sel.length + ' 条？\n' + sel.map((r) => '· ' + (r.name || r.id)).join('\n'))) return;
+      if (!sel.length) return info('没有选中「可撤回」的条目（先勾「全选可撤回」或手动勾选）');
+      if (!confirm('确认批量撤回 ' + sel.length + ' 条？\n' + sel.map((r) => '· ' + (r.mod ? '[' + r.mod + '] ' : '') + (r.name || r.id)).join('\n'))) return;
+      let ok = 0, fail = 0;
       for (let i = 0; i < sel.length; i += 1) {
-        info('撤回 ' + (i + 1) + '/' + sel.length + '：' + (sel[i].name || sel[i].id));
-        sel[i]._retire.click();
-        await sleep(1200);
+        const r = sel[i];
+        info('撤回 ' + (i + 1) + '/' + sel.length + '：' + (r.name || r.id));
+        r._retire.click();
+        const confirmed = await clickRetireConfirm(5000);
+        if (confirmed) { ok += 1; } else { fail += 1; info('第 ' + (i + 1) + ' 条没等到确认弹窗，已跳过：' + (r.name || r.id)); }
+        await sleep(900);
       }
-      info('已提交撤回 ' + sel.length + ' 条，页面即将刷新');
-      setTimeout(() => location.reload(), 1500);
+      info('撤回完成：成功 ' + ok + ' 条' + (fail ? ('，失败 ' + fail + ' 条（没等到弹窗）') : '') + '，页面即将刷新');
+      setTimeout(() => location.reload(), 1800);
     });
 
     document.getElementById('mb-verify-plan').addEventListener('click', () => {
