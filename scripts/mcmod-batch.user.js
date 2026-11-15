@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.43
+// @version      2.44
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -21,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.43';
+  const MB_VERSION = '2.44';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -1446,7 +1446,6 @@
             else if (r.id) { location.href = '/item/edit/' + r.id + '/'; }
             else info('这条没有可用的再编辑入口');
           } else {
-            if (!confirm('确认撤回「' + (r.name || r.id) + '」？撤回后需重新提交。')) return;
             if (r._retire) { r._retire.click(); info('已点击「撤回」：' + (r.name || r.id)); }
           }
         });
@@ -1517,10 +1516,20 @@
       return false;
     }
 
+    // 不使用浏览器原生 confirm：它是同步阻塞框，脚本自己点不掉，还会挡住后续的站点弹窗。
+    // 改成「第一次点击列清单、第二次点击执行」的面板内确认。
+    let retireArmed = null;
     document.getElementById('mb-verify-batchretire').addEventListener('click', async () => {
       const sel = selectedRows().filter((r) => r._retire);
       if (!sel.length) return info('没有选中「可撤回」的条目（先勾「全选可撤回」或手动勾选）');
-      if (!confirm('确认批量撤回 ' + sel.length + ' 条？\n' + sel.map((r) => '· ' + (r.mod ? '[' + r.mod + '] ' : '') + (r.name || r.id)).join('\n'))) return;
+      const sig = sel.map((r) => r.index).join(',');
+      if (retireArmed !== sig) {
+        retireArmed = sig;
+        info('待撤回 ' + sel.length + ' 条：' + sel.slice(0, 8).map((r) => (r.mod ? '[' + r.mod + '] ' : '') + (r.name || r.id)).join('、') +
+          (sel.length > 8 ? (' 等 ' + sel.length + ' 条') : '') + ' —— 再点一次「批量撤回」开始执行');
+        return;
+      }
+      retireArmed = null;
       let ok = 0, fail = 0;
       for (let i = 0; i < sel.length; i += 1) {
         const r = sel[i];
