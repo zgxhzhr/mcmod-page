@@ -72,8 +72,10 @@ def main() -> int:
             problems.append(f"标签不平衡：<{tag}> {op} 个，</{tag}> {cl} 个")
 
     # 4.5 列表标点（审核附言 2026-11-14：各项「；」，末项「。」）
-    lis = re.findall(r"<li[^>]*>(.*?)</li>", t, re.S)
-    if lis:
+    # 按 <ul> 分组判断：一页可能有多个列表，每个列表各有自己的末项
+    #（2026-11-15 修正：之前把全页 li 当一个列表，合并资料页里 15 个 ul 的末项全被误报）
+    for ul in re.findall(r"<ul[^>]*>([\s\S]*?)</ul>", t):
+        lis = re.findall(r"<li[^>]*>(.*?)</li>", ul, re.S)
         for i, inner in enumerate(lis, 1):
             plain_li = re.sub(r"<[^>]+>", "", inner).strip()
             if not plain_li:
