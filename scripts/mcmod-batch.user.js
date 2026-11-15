@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.45
+// @version      2.46
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -21,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.45';
+  const MB_VERSION = '2.46';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -1364,6 +1364,11 @@
       '#mb-verify-panel .mb-bd{padding:10px 12px !important;max-height:64vh !important;overflow:auto !important;}',
       '#mb-verify-panel button{margin:3px 6px 3px 0 !important;padding:6px 12px !important;border-radius:6px !important;',
       'border:1px solid #1d4ed8 !important;background:#2563eb !important;color:#fff !important;font-weight:600 !important;cursor:pointer !important;}',
+      '#mb-verify-panel .mb-vsel{width:18px !important;height:18px !important;margin:0 !important;cursor:pointer !important;flex:0 0 18px !important;}',
+      '#mb-verify-panel .mb-vrow{cursor:pointer !important;border-radius:6px !important;padding-left:4px !important;user-select:none !important;}',
+      '#mb-verify-panel .mb-vrow:hover{background:#f1f5f9 !important;}',
+      '#mb-verify-panel .mb-vrow.mb-on{background:#e0f2fe !important;}',
+      '#mb-verify-panel #mb-verify-count{display:inline-block !important;margin:3px 0 0 8px !important;font-size:13px !important;color:#111827 !important;font-weight:700 !important;}',
       '#mb-verify-panel pre{margin:8px 0 0 !important;padding:8px !important;background:#f3f4f6 !important;color:#111827 !important;',
       'border:1px solid #d1d5db !important;border-radius:6px !important;max-height:30vh !important;overflow:auto !important;',
       'font-size:12px !important;white-space:pre-wrap !important;}',
@@ -1381,6 +1386,8 @@
       '<button id="mb-verify-batchretire" style="background:#b91c1c !important;border-color:#991b1b !important">批量撤回</button>' +
       '<button id="mb-verify-selretirable" style="background:#374151 !important;border-color:#1f2937 !important">全选可撤回</button>' +
       '<button id="mb-verify-invert" style="background:#374151 !important;border-color:#1f2937 !important">反选</button>' +
+      '<button id="mb-verify-selnone" style="background:#6b7280 !important;border-color:#4b5563 !important">清空勾选</button>' +
+      '<span id="mb-verify-count">已选 0 条</span>' +
       '<select id="mb-verify-modfilter" style="margin:3px 0 3px 0;padding:5px 8px;border-radius:6px;border:1px solid #d1d5db;font-size:13px">' +
       '<option value="">全部模组</option></select>' +
       '<button id="mb-verify-batchagain">批量打开编辑页</button>' +
@@ -1435,6 +1442,18 @@
           (r.hasRetire ? '<button data-act="retire" data-i="' + r.index + '" style="padding:3px 8px !important;font-size:12px !important;background:#b91c1c !important;border-color:#991b1b !important">撤回</button>' : '') +
           '</div>';
       }).join('');
+      box.querySelectorAll('.mb-vrow').forEach((div) => {
+        const c = div.querySelector('.mb-vsel');
+        const sync = () => { div.classList.toggle('mb-on', !!(c && c.checked)); updateCount(); };
+        div.addEventListener('click', (ev) => {
+          if (ev.target && ev.target.closest && ev.target.closest('button')) return;
+          if (ev.target !== c) { c.checked = !c.checked; ev.preventDefault(); }
+          sync();
+        });
+        if (c) c.addEventListener('change', sync);
+        sync();
+      });
+
       box.querySelectorAll('button[data-act]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const r = rows.find((x) => String(x.index) === btn.getAttribute('data-i'));
@@ -1465,6 +1484,8 @@
 
     document.getElementById('mb-verify-all').addEventListener('change', (e) => {
       document.querySelectorAll('.mb-vsel').forEach((c) => { c.checked = e.target.checked; });
+      document.querySelectorAll('.mb-vrow').forEach((d) => d.classList.toggle('mb-on', e.target.checked));
+      updateCount();
     });
 
     document.getElementById('mb-verify-selretirable').addEventListener('click', () => {
@@ -1476,14 +1497,32 @@
         const box = div.querySelector('.mb-vsel');
         if (r && r.hasRetire) { box.checked = true; n += 1; } else { box.checked = false; }
       });
+      updateCount();
       info('已勾选可撤回 ' + n + ' 条');
     });
 
+      document.getElementById('mb-verify-selnone').addEventListener('click', () => {
+        document.querySelectorAll('.mb-vsel').forEach((c) => { c.checked = false; });
+        document.querySelectorAll('.mb-vrow').forEach((d) => d.classList.remove('mb-on'));
+        updateCount();
+        info('已清空勾选');
+      });
+
     document.getElementById('mb-verify-invert').addEventListener('click', () => {
       document.querySelectorAll('.mb-vsel').forEach((c) => { c.checked = !c.checked; });
+      document.querySelectorAll('.mb-vrow').forEach((d) => {
+        const c = d.querySelector('.mb-vsel'); d.classList.toggle('mb-on', !!(c && c.checked));
+      });
+      updateCount();
     });
 
     document.getElementById('mb-verify-modfilter').addEventListener('change', renderRows);
+
+    function updateCount() {
+      const n = document.querySelectorAll('.mb-vsel:checked').length;
+      const el = document.getElementById('mb-verify-count');
+      if (el) el.textContent = '已选 ' + n + ' 条';
+    }
 
     function selectedRows() {
       const ids = [...document.querySelectorAll('.mb-vsel:checked')].map((c) => c.getAttribute('data-i'));
@@ -1531,15 +1570,8 @@
 
     document.getElementById('mb-verify-batchretire').addEventListener('click', async () => {
       const sel = selectedRows().filter((r) => r._retire);
-      if (!sel.length) return info('没有选中「可撤回」的条目（先勾「全选可撤回」或手动勾选）');
-      const sig = sel.map((r) => r.index).join(',');
-      if (retireArmed !== sig) {
-        retireArmed = sig;
-        info('待撤回 ' + sel.length + ' 条：' + sel.slice(0, 8).map((r) => (r.mod ? '[' + r.mod + '] ' : '') + (r.name || r.id)).join('、') +
-          (sel.length > 8 ? (' 等 ' + sel.length + ' 条') : '') + ' —— 再点一次「批量撤回」开始执行');
-        return;
-      }
-      retireArmed = null;
+      if (!sel.length) return info('没有选中「可撤回」的条目：先点「全选可撤回」，或直接点行勾选');
+      info('开始撤回 ' + sel.length + ' 条…');
       let ok = 0, fail = 0;
       for (let i = 0; i < sel.length; i += 1) {
         const r = sel[i];
