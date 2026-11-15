@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.47
+// @version      2.48
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -21,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.47';
+  const MB_VERSION = '2.48';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -1546,17 +1546,25 @@
      *   - 兜底：全屏找可见且文字为「确定/确认」的元素（排除我们自己的面板）。
      */
     function fireClick(el) {
-      try {
-        const r = el.getBoundingClientRect();
-        const opt = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
-        el.dispatchEvent(new PointerEvent('pointerdown', opt));
-        el.dispatchEvent(new MouseEvent('mousedown', opt));
-        el.dispatchEvent(new PointerEvent('pointerup', opt));
-        el.dispatchEvent(new MouseEvent('mouseup', opt));
-        el.dispatchEvent(new MouseEvent('click', opt));
-        if (typeof el.click === 'function') el.click();
-        return true;
-      } catch (e) { return false; }
+      // 逐事件 try：某些环境没有 PointerEvent 构造器，不能因此中断整串事件。
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const opt = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0, buttons: 1 };
+      const seq = [
+        ['pointerdown', 'PointerEvent'], ['mousedown', 'MouseEvent'],
+        ['pointerup', 'PointerEvent'], ['mouseup', 'MouseEvent'], ['click', 'MouseEvent'],
+      ];
+      let fired = 0;
+      for (const [type, ctorName] of seq) {
+        try {
+          const Ctor = window[ctorName] || window.MouseEvent;
+          el.dispatchEvent(new Ctor(type, opt));
+          fired += 1;
+        } catch (e) { /* 单个事件失败不影响其余 */ }
+      }
+      try { if (typeof el.click === 'function') { el.click(); fired += 1; } } catch (e) { /* ignore */ }
+      return fired > 0;
     }
 
     function collectDocs() {
@@ -1580,7 +1588,8 @@
       const panel = doc.getElementById('mb-verify-panel');
       const okText = (t) => /^(确定|确认|是)$/.test(String(t || '').replace(/\s/g, ''));
       // 1) 站点常见 class
-      const byClass = doc.querySelectorAll('.layui-layer-btn0, .swal2-confirm, .el-button--primary, .btn-primary');
+      // 控制台实测：站点的确认框是 SweetAlert2 → <button class="swal2-confirm swal2-styled">确定</button>
+      const byClass = doc.querySelectorAll('.swal2-container .swal2-confirm, .swal2-confirm, .layui-layer-btn0, .el-button--primary, .btn-primary');
       for (const el of byClass) {
         if (panel && panel.contains(el)) continue;
         if (!visible(el)) continue;
@@ -1609,7 +1618,11 @@
           const btn = findConfirmButton(doc);
           if (btn) {
             const ok = fireClick(btn);
-            if (ok) return true;
+            if (ok) {
+              await sleep(200);
+              const still = doc.querySelector('.swal2-container');
+              if (!still) return true;
+            }
           }
           const dlg = [...doc.querySelectorAll('.layui-layer, [class*="dialog"], [class*="confirm"], [class*="modal"]')]
             .find((el) => /撤回确认|确定要撤回/.test(el.innerText || ''));
