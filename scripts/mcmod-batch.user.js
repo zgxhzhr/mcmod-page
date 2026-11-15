@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.44
+// @version      2.45
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -21,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.44';
+  const MB_VERSION = '2.45';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -1490,35 +1490,45 @@
       return rows.filter((r) => ids.indexOf(String(r.index)) >= 0);
     }
 
-    /** 点掉站点的「确定要撤回此项提交吗？」弹窗。
-     *  弹窗按钮文字是「确定」，个别页面是「确认」；只点弹窗内部的按钮，
-     *  避免误触列表里的其它按钮。 */
+    /** 跨同源 iframe 收集 document（MC百科的确认框有时挂在 iframe 里）。 */
+    function deepDocs() {
+      const docs = [document];
+      document.querySelectorAll('iframe').forEach((f) => {
+        try { if (f.contentDocument) docs.push(f.contentDocument); } catch (e) { /* 跨域跳过 */ }
+      });
+      return docs;
+    }
+
+    /** 点掉站点的「撤回确认 / 确定要撤回此项提交吗？」弹窗。
+     *  - 站点用的是 layui 风格弹窗：按钮是 .layui-layer-btn0（绿底「确定」），
+     *    不是普通 <button>，按文字找容易漏；这里优先按 class 找，再按容器内文字兜底。
+     *  - 弹窗可能在 iframe 里，所以遍历同源 iframe 的 document。
+     */
     async function clickRetireConfirm(maxMs) {
       const t0 = Date.now();
-      const limit = maxMs || 5000;
+      const limit = maxMs || 3000;
       while (Date.now() - t0 < limit) {
-        const cands = [...document.querySelectorAll('button,a,span,div')].filter((el) => {
-          const txt = (el.innerText || '').trim();
-          if (!/^(确定|确认|是|撤回)$/.test(txt)) return false;
-          const r = el.getBoundingClientRect();
-          if (!(r.width > 0 && r.height > 0)) return false;
-          // 必须在弹窗里：祖先含「撤回确认」或「确定要撤回」字样
-          let p = el;
-          for (let d = 0; d < 6 && p; d += 1, p = p.parentElement) {
-            const pt = (p.innerText || '');
-            if (/撤回确认|确定要撤回/.test(pt)) return true;
+        for (const doc of deepDocs()) {
+          const dialog = [...doc.querySelectorAll('.layui-layer, .layui-layer-dialog, .modal, [class*="dialog"], [class*="confirm"]')]
+            .find((el) => /撤回确认|确定要撤回/.test(el.innerText || ''));
+          if (dialog) {
+            const btn = [...dialog.querySelectorAll('button,a,span,div,input[type=button]')]
+              .find((el) => {
+                const txt = (el.innerText || el.value || '').replace(/\s/g, '');
+                const cls = (el.className || '').toString();
+                if (/layui-layer-btn0/.test(cls)) return true;
+                return /^(确定|确认)$/.test(txt) && cls.indexOf('layui-layer-btn1') < 0;
+              });
+            if (btn) { btn.click(); return true; }
           }
-          return false;
-        });
-        if (cands.length) { cands[0].click(); return true; }
-        await sleep(120);
+          const lay = doc.querySelector('.layui-layer-btn0');
+          if (lay) { lay.click(); return true; }
+        }
+        await sleep(100);
       }
       return false;
     }
 
-    // 不使用浏览器原生 confirm：它是同步阻塞框，脚本自己点不掉，还会挡住后续的站点弹窗。
-    // 改成「第一次点击列清单、第二次点击执行」的面板内确认。
-    let retireArmed = null;
     document.getElementById('mb-verify-batchretire').addEventListener('click', async () => {
       const sel = selectedRows().filter((r) => r._retire);
       if (!sel.length) return info('没有选中「可撤回」的条目（先勾「全选可撤回」或手动勾选）');
@@ -1535,9 +1545,9 @@
         const r = sel[i];
         info('撤回 ' + (i + 1) + '/' + sel.length + '：' + (r.name || r.id));
         r._retire.click();
-        const confirmed = await clickRetireConfirm(5000);
+        const confirmed = await clickRetireConfirm(3000);
         if (confirmed) { ok += 1; } else { fail += 1; info('第 ' + (i + 1) + ' 条没等到确认弹窗，已跳过：' + (r.name || r.id)); }
-        await sleep(900);
+        await sleep(450);
       }
       info('撤回完成：成功 ' + ok + ' 条' + (fail ? ('，失败 ' + fail + ' 条（没等到弹窗）') : '') + '，页面即将刷新');
       setTimeout(() => location.reload(), 1800);
