@@ -188,7 +188,14 @@ def audit_items(path):
             if r > top:
                 top, pair = r, (a, b)
 
-    if ratio >= 30 or top >= 30:
+    has_common_text = any(str(it.get("category") or "").strip() == "{文本}" for it in data)
+    if has_common_text:
+        # 引用了通用文本时，各条正文本来就只剩「独有数据」，句子框架必然同构。
+        # 这是 §6.1.9 的预期形态，不该按整页重复率判。
+        verdict = "本批已用通用文本（{文本}）承接共性，各条只留独有数据，重复率指标仅作参考"
+        if ratio >= 30 or top >= 30:
+            infos.append(f"重复度 {ratio:.1f}% / 8-gram {top*100:.1f}%（通用文本方案下属正常）")
+    elif ratio >= 30 or top >= 30:
         verdict = "超门槛：考虑 合并 / 综合 / 引用通用文本（见 §6.1.10）"
         warns.append(f"重复度 {ratio:.1f}% / 8-gram {top*100:.1f}% → {verdict}")
     else:
