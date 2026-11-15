@@ -96,8 +96,10 @@ def audit_items(path):
         if not it.get("icon32") and it.get("icon128"):
             warns.append(f"[{name}] 只给了大图标（icon32 为空）——批量脚本会勾「删除小图标」，确认是有意的")
         # 抽象资料/通用文本本来就没有图标（rules/04 §唯一例外），不按此判
+        # 只有「物品/方块」必须给大图标；实体/设定类允许无图标（导出异常或本就无图）
         if (not it.get("icon32") and not it.get("icon128")
-                and it.get("regname") and not is_abstract):
+                and it.get("regname") and not is_abstract
+                and it.get("type") == "物品/方块"):
             blocks.append(f"[{name}] 大小图标都为空（真实物品/方块应至少给大图标）")
 
         if "ename" not in keys:
