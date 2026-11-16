@@ -76,7 +76,7 @@ python doctor.py          # 环境 / 启动器 / 工具 jar / 网络 四类逐�
 | MC / 加载器 | 导出工具 | 进世界方式 | 状态 |
 |---|---|---|---|
 | **1.21.1 NeoForge** | LetMeSeeSee（fork） | `--quickPlaySingleplayer` | ✅ 物品 + 实体 |
-| **1.20.1 Forge** | IconRenderer-Forge | `--quickPlaySingleplayer` | ✅ |
+| **1.20.1 Forge** | IconRenderer-Forge | `--quickPlaySingleplayer` | ✅（agent 需 ≥2026-11-16：context loader 切换 + needsWorld 门控，旧 agent 在 mod loading 期反射触发 transformer 崩） |
 | **1.20.1 Fabric** | IconRenderer（fork） | `--quickPlaySingleplayer` | ✅ |
 | **1.19.2 Forge** | IconRenderer-Forge | 本地服务端 + `--server` | ✅ |
 | **1.19.2 Fabric** | IconRenderer（fork） | 本地服务端 + `--server` | ✅ |
