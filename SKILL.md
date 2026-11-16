@@ -62,6 +62,15 @@ h1 铺满全篇、画廊没后置、版本信息节、注册名留空、对比�
 - 「已验证」却写不出依据、或用「大概/应该/我记得」→ **阻断**
 - 正文里出现版本号但证据表里没有 → **版本是猜的，阻断**
 
+**规则块一改，历史交付的声明就过期**（2026-11-16 连被 06/09 各拦一次）：这不是交付错误，
+是快照过期。改完规则块立刻把历史交付 README 的指纹刷新一遍再重跑 preflight：
+
+```powershell
+# 用当前 SHA256 前 8 位覆盖所有 交付/*/README.md 里的 [xxxxxxxx]
+# 存成 refresh-sha.py 再跑（别用 bash heredoc，这里是 PowerShell）
+python refresh-sha.py
+```
+
 取当前指纹：`python scripts/preflight.py . --print-sha`
 
 **交付前必答三问**（答不出来就是没读规则块）：
