@@ -177,17 +177,28 @@ public final class AgentMain {
                 log("经 FMLClientHandler 拿到客户端类: " + mcClass.getName());
                 break;
             }
-            mcClass = findClassAny("net.minecraft.client.Minecraft",
+            mcClass = findLoadedAny("net.minecraft.client.Minecraft",
                     "net.minecraft.client.MinecraftClient",
                     "net.minecraft.class_310");
-            boolean worldReady = findClassAny(LEVEL_TYPES) != null;
-            boolean forgeReady = findClass("net.minecraftforge.client.event.ScreenEvent") != null
-                    || findClass("net.minecraftforge.common.MinecraftForge") != null;
+            if (mcClass != null && mcClass.getClassLoader() != null
+                    && Thread.currentThread().getContextClassLoader() != mcClass.getClassLoader()) {
+                // transformer 用调用线程 context loader 解析父类：
+                // 不切到 ModLauncher loader 就会 Could not find parent Gui/LevelEvent → 事件总线残废
+                Thread.currentThread().setContextClassLoader(mcClass.getClassLoader());
+                log("context loader 已切到 ModLauncher loader");
+            }
+            boolean worldReady = findLoadedAny(LEVEL_TYPES) != null;
+            boolean forgeReady = findLoaded("net.minecraftforge.client.event.ScreenEvent") != null
+                    || findLoaded("net.minecraftforge.common.MinecraftForge") != null;
             // 阶段一只需要「客户端类已出现 + Forge 转换器已就绪」。
             // 之前还要求 worldReady（世界类已加载），但世界类名各版本差异太大，
             // 1.16.5 上永远匹配不到，于是阶段一吃掉了整个超时（踩过）。
             boolean longEnough = System.currentTimeMillis() - start > 8000;
-            if (mcClass != null && (forgeReady || worldReady || longEnough)) {
+            String modeNow = PARAMS.getOrDefault("mode", "");
+            boolean needsWorld = "iconr".equals(modeNow) || "iconrd".equals(modeNow)
+                    || "lms".equals(modeNow) || "lmsent".equals(modeNow);
+            // iconr/lms 系禁止 8 秒兜底放行：mod loading 未完就反射 → transformer 崩（2026-11-16 实测）
+            if (mcClass != null && (needsWorld ? worldReady : (forgeReady || worldReady || longEnough))) {
                 break;
             }
             if (System.currentTimeMillis() - lastPhaseLog > 5000) {
@@ -1039,6 +1050,26 @@ public final class AgentMain {
 
     // ── 反射工具：按类型/签名找，不按名字 ────────────────────────
 
+/** 只扫已加载类：mod loading 期主动 Class.forName 会触发 event 包转换（2026-11-16） */
+    static Class<?> findLoaded(String name) {
+        for (Class<?> c : INST.getAllLoadedClasses()) {
+            if (c.getName().equals(name)) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    static Class<?> findLoadedAny(String... names) {
+        for (String n : names) {
+            Class<?> c = findLoaded(n);
+            if (c != null) {
+                return c;
+            }
+        }
+        return null;
+    }
+
     private static Class<?> findClass(String name) {
         for (Class<?> c : INST.getAllLoadedClasses()) {
             if (c.getName().equals(name)) {
@@ -1130,6 +1161,12 @@ public final class AgentMain {
     }
 
     private static Object mcInstance(Class<?> mcClass) {
+        // 优先 FMLClientHandler：getDeclaredMethods(Minecraft) 会解析全部方法签名类
+        // （含 event 包），在 mod loading 期触发 transformer → 崩（2026-11-16）
+        Object viaH = mcViaFmlHandler();
+        if (viaH != null) {
+            return viaH;
+        }
         if (mcClass == null) {
             // 混淆命名版本（1.16.5 及更早的 Forge）拿不到类名，走 Forge 的 handler
             return mcViaFmlHandler();
