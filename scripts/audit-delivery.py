@@ -32,7 +32,7 @@ from itertools import combinations
 #   · remark 选填（用户可能要求不填）
 #   · 图标裸 base64（不加 data: 前缀）
 FIELD_ORDER = ["id", "name", "ename", "regname", "category", "type",
-               "maxstack", "damage", "html", "icon32", "icon128", "remark"]
+               "maxstack", "damage", "durability", "html", "icon32", "icon128", "remark"]
 
 # 历史翻车词表，只增不减（每发现一次就加一条，并注明出事的模组 id）
 BLACKLIST = [
@@ -104,6 +104,23 @@ def audit_items(path):
 
         if "ename" not in keys:
             warns.append(f"[{name}] 缺 ename 键（无中文时规则要求保留该键并留空）")
+    # 2026-11-16 审核附言：抽象父资料（无注册名 + 有正文）的次要名称必须写
+    for it in items:
+        if not (it.get("regname") or "").strip() and (it.get("html") or "").strip():
+            if not (it.get("ename") or "").strip():
+                warn(f"[{it.get('name','')}] 父资料次要名称（ename）为空 —— 审核要求成对写英文名（rules/06 §6.2.4）")
+
+    # durability：给了就必须是正整数（站上「耐久度」字段，2026-11-16）
+    for it in items:
+        d = it.get("durability")
+        if d in (None, ""):
+            continue
+        try:
+            if int(d) < 1:
+                raise ValueError
+        except Exception:
+            warn(f"[{it.get('name','')}] durability 不是正整数：{d!r}")
+
 
         # 2) 附言
         remark = it.get("remark", "")

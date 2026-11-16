@@ -1,0 +1,148 @@
+intermediary	yarn名	类型	所属类
+class_10823	WolfSoundVariant	类	
+class_1297	Entity	类	
+class_1299	EntityType	类	
+class_1308	MobEntity	类	
+class_1309	LivingEntity	类	
+class_1321	TameableEntity	类	
+class_1352	Goal	类	
+class_1355	GoalSelector	类	
+class_1374	EscapeDangerGoal	类	
+class_1405	TrackTargetGoal	类	
+class_1493	WolfEntity	类	
+class_1657	PlayerEntity	类	
+class_175	AdvancementCriterion	类	
+class_179	Criterion	类	
+class_1792	Item	类	
+class_1793	Settings	类	
+class_1802	Items	类	
+class_1814	Rarity	类	
+class_184	CriterionConditions	类	
+class_1935	ItemConvertible	类	
+class_1937	World	类	
+class_2048	EntityPredicate	类	
+class_2096	NumberRange	类	
+class_2100	IntRange	类	
+class_2378	Registry	类	
+class_238	Box	类	
+class_243	Vec3d	类	
+class_2940	TrackedData	类	
+class_2941	TrackedDataHandler	类	
+class_2943	TrackedDataHandlerRegistry	类	
+class_2945	DataTracker	类	
+class_2960	Identifier	类	
+class_304	KeyBinding	类	
+class_307	Type	类	
+class_3218	ServerWorld	类	
+class_3222	ServerPlayerEntity	类	
+class_3414	SoundEvent	类	
+class_3419	SoundCategory	类	
+class_3675	InputUtil	类	
+class_4134	Control	类	
+class_4135	PrioritizedGoal	类	
+class_4558	AbstractCriterion	类	
+class_5258	LootContextPredicate	类	
+class_5321	RegistryKey	类	
+class_5712	GameEvent	类	
+class_5819	Random	类	
+class_6862	TagKey	类	
+class_6880	RegistryEntry	类	
+class_6883	Reference	类	
+class_7706	ItemGroups	类	
+class_7923	Registries	类	
+class_7924	RegistryKeys	类	
+class_8710	CustomPayload	类	
+class_8788	Conditions	类	
+class_9129	RegistryByteBuf	类	
+class_9139	PacketCodec	类	
+class_9154	Id	类	
+class_9222	Builder	类	
+class_9793	JukeboxSong	类	
+field_13323	BOOLEAN	字段	TrackedDataHandlerRegistry
+field_13327	INTEGER	字段	TrackedDataHandlerRegistry
+field_15248	PLAYERS	字段	SoundCategory
+field_1668	KEYSYM	字段	Type
+field_18405	MOVE	字段	Control
+field_23984	MUSIC_DISC_PIGSTEP	字段	Items
+field_41060	TOOLS	字段	ItemGroups
+field_41171	GAME_EVENT	字段	Registries
+field_41172	SOUND_EVENT	字段	Registries
+field_41197	ITEM	字段	RegistryKeys
+field_41266	ENTITY_TYPE	字段	RegistryKeys
+field_41273	GAME_EVENT	字段	RegistryKeys
+field_45763	CODEC	字段	IntRange
+field_47250	LOOT_CONTEXT_PREDICATE_CODEC	字段	EntityPredicate
+field_47496	CRITERION	字段	Registries
+field_52176	JUKEBOX_SONG	字段	RegistryKeys
+field_6011	dataTracker	字段	Entity
+field_6201	goalSelector	字段	MobEntity
+field_8903	RARE	字段	Rarity
+field_9708	ANY	字段	IntRange
+method_1009	expand	方法	Box
+method_1019	add	方法	Vec3d
+method_1020	subtract	方法	Vec3d
+method_1021	multiply	方法	Vec3d
+method_10214	getY	方法	Position
+method_10215	getZ	方法	Position
+method_10216	getX	方法	Position
+method_10230	register	方法	Registry
+method_1026	dotProduct	方法	Vec3d
+method_1029	normalize	方法	Vec3d
+method_1033	length	方法	Vec3d
+method_1036	crossProduct	方法	Vec3d
+method_12778	set	方法	DataTracker
+method_12789	get	方法	DataTracker
+method_12791	registerData	方法	DataTracker
+method_1434	isPressed	方法	KeyBinding
+method_17356	playSoundToPlayer	方法	PlayerEntity
+method_19057	getPriority	方法	PrioritizedGoal
+method_19058	getGoal	方法	PrioritizedGoal
+method_19538	getPos	方法	VehicleInventory
+method_20210	isIn	方法	EntityType
+method_22510	trigger	方法	AbstractCriterion
+method_24345	isSitting	方法	TameableEntity
+method_29179	of	方法	RegistryKey
+method_31574	isOf	方法	ItemStack
+method_32876	emitGameEvent	方法	Entity
+method_35057	getOwner	方法	Tameable
+method_35115	getGoals	方法	GoalSelector
+method_37908	getWorld	方法	VehicleInventory
+method_40092	of	方法	TagKey
+method_43047	create	方法	Random
+method_43048	nextInt	方法	Random
+method_43129	playSoundFromEntity	方法	World
+method_45421	add	方法	Entries
+method_47908	of	方法	SoundEvent
+method_47985	registerReference	方法	Registry
+method_51348	register	方法	Items
+method_53699	create	方法	Criterion
+method_54937	getConditionsCodec	方法	Criterion
+method_56431	unit	方法	PacketCodec
+method_56479	getId	方法	CustomPayload
+method_56912	add	方法	Builder
+method_5707	squaredDistanceTo	方法	Entity
+method_5783	playSound	方法	Entity
+method_5829	getBoundingBox	方法	VehicleInventory
+method_5858	squaredDistanceTo	方法	Entity
+method_5864	getType	方法	Entity
+method_5942	getNavigation	方法	MobEntity
+method_5951	lookAtEntity	方法	MobEntity
+method_6047	getMainHandStack	方法	LivingEntity
+method_60655	of	方法	Identifier
+method_60745	jukeboxPlayable	方法	Settings
+method_6079	getOffHandStack	方法	LivingEntity
+method_6171	isOwner	方法	TameableEntity
+method_6264	canStart	方法	Goal
+method_6265	setControls	方法	Goal
+method_6266	shouldContinue	方法	Goal
+method_6268	tick	方法	Goal
+method_6269	start	方法	Goal
+method_6270	stop	方法	Goal
+method_6277	add	方法	GoalSelector
+method_6337	startMovingTo	方法	EntityNavigation
+method_68131	getSoundVariant	方法	WolfEntity
+method_7889	maxCount	方法	Settings
+method_7894	rarity	方法	Settings
+method_7895	maxDamage	方法	Settings
+method_8390	getEntitiesByClass	方法	EntityView
+method_9054	test	方法	IntRange

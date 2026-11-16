@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.48
+// @version      2.49
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -21,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.48';
+  const MB_VERSION = '2.49';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -119,8 +119,6 @@
   }
   function clearEditPlan() { sessionStorage.removeItem(PLAN_KEY); }
 
-
-
   // 同页可能同时存在「篡改猴旧版」和「扩展新版」：只有版本相同才复用，
   // 否则清掉旧面板由本脚本接管（避免旧版一直显示 v2.6）
   if (window.__mbBatchLoaded) {
@@ -200,6 +198,27 @@
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
   function q(sel) { return document.querySelector(sel); }
   function qm(k) { return document.querySelector('[data-multi-id="' + k + '"]'); }
+
+  // 耐久度字段：站上 data-multi-id 名未公开核实，这里按「已知候选名 → 标签文本」两级探测，
+  // 换站改字段名也不会静默丢数据（2026-11-16 审核附言：耐久度填到物品的耐久度选项里）
+  function qDurability() {
+    // 实测（2026-11-16 截图）：耐久度在「扩展信息」页签，输入框 placeholder 是「最大耐久..」。
+    // 三级探测：placeholder → data-multi-id 候选 → 标签文本兜底。
+    const byPh = [...document.querySelectorAll('input')]
+      .find((el) => /最大耐久|耐久/.test(el.getAttribute('placeholder') || ''));
+    if (byPh) return byPh;
+    for (const k of ['durability', 'maxdamage', 'maxDurability', 'max_damage', 'maxdur']) {
+      const el = qm(k);
+      if (el) return el;
+    }
+    for (const m of [...document.querySelectorAll('label, th, td, span, dt, strong, div')]) {
+      if (!/最大耐久|耐久度/.test(m.textContent || '') || m.children.length > 2) continue;
+      const box = m.closest('tr, li, .form-group, .mb-3, .tab-pane') || m.parentElement;
+      const el = box && box.querySelector('input');
+      if (el) return el;
+    }
+    return null;
+  }
 
   function setVal(el, v) {
     if (!el || v === undefined || v === null || v === '') return false;
@@ -326,7 +345,6 @@
     return { found: boxes.length, changed };
   }
 
-
   async function fillOne(it) {
     ensureType(it.type);
     await sleep(1200);
@@ -339,6 +357,7 @@
     clearOrSet(qm('ename'), it.ename);
     clearOrSet(qm('regname'), it.regname);
     clearOrSet(qm('maxstack'), it.maxstack);
+    clearOrSet(qDurability(), it.durability);
     clearOrSet(qm('damage'), it.damage);
     clearOrSet(qm('oredict'), it.oredict);
     setVal(qm('remark'), it.remark || ('批量录入 ' + classId));
@@ -849,7 +868,6 @@
     console.log('[列表工具] 面板已注入', classId, typeId);
   }
 
-
   // ================= 批量编辑：执行端（编辑页） =================
 
   /** 编辑页与新增页的编辑器不同，这里按可能性依次尝试，返回命中的路径名。 */
@@ -1231,6 +1249,7 @@
       lines.push('按钮候选(' + btns.length + '):');
       btns.slice(0, 8).forEach((b) => lines.push('  「' + b.t + '」id=' + (b.id || '-') + ' cls=' + (b.c || '-')));
       lines.push('矿物词典字段: ' + (qm('oredict') ? '存在' : '未找到'));
+    lines.push('耐久度字段: ' + (qDurability() ? '存在' : '未找到'));
       ['改动附言', '改动说明'].forEach((kw) => {
         const r = findByLabel(kw);
         lines.push(kw + '定位: ' + (r ? ('命中 ' + (r.el.tagName + '#' + (r.el.id || '-') + '.' + ((r.el.className || '') + '').slice(0, 16)) + ' [' + r.how + ']') : '未命中'));
@@ -1250,7 +1269,6 @@
     });
     document.getElementById('mb-edit-clear').addEventListener('click', () => { clearEditPlan(); info('队列已清空'); });
   }
-
 
   // ================= 审核列表（/verify*）：读取与撤回 =================
 
@@ -1755,7 +1773,6 @@
       console.log('[批量工具][审核列表诊断]\n' + lines.join('\n'));
     });
   }
-
 
   // ================= 新增页：队列执行端（退回条目重交，URL 形如 /item/add/31864-809903/） =================
 
