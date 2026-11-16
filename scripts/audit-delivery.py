@@ -104,24 +104,20 @@ def audit_items(path):
 
         if "ename" not in keys:
             warns.append(f"[{name}] 缺 ename 键（无中文时规则要求保留该键并留空）")
-    # 2026-11-16 审核附言：抽象父资料（无注册名 + 有正文）的次要名称必须写
-    for it in items:
+        # 2026-11-16 审核附言：抽象父资料（无注册名 + 有正文）的次要名称必须写（rules/06 §6.2.4）
         if not (it.get("regname") or "").strip() and (it.get("html") or "").strip():
             if not (it.get("ename") or "").strip():
-                warn(f"[{it.get('name','')}] 父资料次要名称（ename）为空 —— 审核要求成对写英文名（rules/06 §6.2.4）")
-
-    # durability：给了就必须是正整数（站上「最大耐久」= data-multi-id="damage"，2026-11-16 实测）
-    for it in items:
+                warns.append(f"[{name}] 父资料次要名称（ename）为空 —— 审核要求成对写英文名")
+        # 耐久度：站上「最大耐久」= data-multi-id="damage"（2026-11-16 实测）；JSON 推荐 durability
         if it.get("durability") not in (None, "") and it.get("damage") not in (None, ""):
-            warn(f"[{it.get('name','')}] durability 与 damage 同时存在，damage 是同一字段的旧别名，建议只留 durability")
-        d = it.get("durability") if it.get("durability") not in (None, "") else it.get("damage")
-        if d in (None, ""):
-            continue
-        try:
-            if int(d) < 1:
-                raise ValueError
-        except Exception:
-            warn(f"[{it.get('name','')}] durability 不是正整数：{d!r}")
+            warns.append(f"[{name}] durability 与 damage 同时存在（同一字段的旧别名），建议只留 durability")
+        _dur = it.get("durability") if it.get("durability") not in (None, "") else it.get("damage")
+        if _dur not in (None, ""):
+            try:
+                if int(_dur) < 1:
+                    raise ValueError
+            except Exception:
+                blocks.append(f"[{name}] durability 必须是 ≥1 的整数：{_dur!r}")
 
 
         # 2) 附言
