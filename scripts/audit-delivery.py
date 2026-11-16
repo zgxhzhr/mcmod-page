@@ -67,6 +67,17 @@ def huifu_hits(text: str):
     return out
 
 
+# 状态效果等级必须用罗马数字（审核附言 2026-11-16：状态效果使用罗马数字而非阿拉伯数字）
+_EFF = ("速度|缓慢|急迫|挖掘疲劳|力量|瞬间治疗|瞬间伤害|跳跃提升|反胃|生命恢复|抗性提升|失明|夜视|"
+        "饥饿|虚弱|中毒|凋零|生命提升|伤害吸收|饱和|发光|漂浮|好运|霉运|不祥之兆|黑暗|渗透|冰冻|缓降")
+_EFF_LVL = re.compile(r"(?<![攻击移挖飞弹])(" + _EFF + r")\s*([1-9])(?![\d.])(?!\s*(?:秒|分钟|分|小时|tick|点|格|颗|%))")
+
+
+def effect_level_hits(text: str):
+    """效果名后直接跟阿拉伯数字等级 → 应改罗马数字（持续时间不算）。"""
+    return [m.group(0) for m in _EFF_LVL.finditer(text)]
+
+
 FORBIDDEN_REMARK = ["反编译", "反混淆", "脚本导出", "抓包", "由我"]
 
 END_RE = re.compile(r"辛苦([喵呜娘]+)机了。?$")  # rules/02 §6.2.3 含「喵娘」特例
@@ -188,6 +199,8 @@ def audit_items(path):
                 blocks.append(f"[{name}] {k} base64 解码失败")
 
         # 5) 黑名单
+        for _bad in effect_level_hits(txt):
+            blocks.append(f"[{name}] 状态效果等级要写罗马数字：…{_bad}… → 如「速度 II」「力量 I」")
         for _frag in huifu_hits(txt):
             blocks.append(f"[{name}] 「回复」应为「恢复」（康复语境：…{_frag}…；答复语境的「回复」不拦）")
         for word, why in BLACKLIST:
@@ -254,6 +267,8 @@ def audit_intro(path, data):
             blocks.append(f"[介绍页] 命中黑名单「{word}」——{why}")
     for _frag in huifu_hits(txt):
         blocks.append(f"[介绍页] 「回复」应为「恢复」（康复语境：…{_frag}…）")
+    for _bad in effect_level_hits(txt):
+        blocks.append(f"[介绍页] 状态效果等级要写罗马数字：…{_bad}…")
 
     h1 = len(re.findall(r"\[h1=", html))
     heads = len(re.findall(r"\[h[12]=", html))
