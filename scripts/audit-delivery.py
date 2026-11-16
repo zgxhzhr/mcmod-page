@@ -44,10 +44,29 @@ BLACKLIST = [
     ("不会提示", "25147：checkBlockArray 失败会生成 BLOCK_MARKER 粒子"),
     ("点燃周围方块", "20947：原版 PrimedTnt 的 explode 是 fire=false"),
     ("名称取自 lang", "25147：lang 里没有该键时这句话就是编"),
-    ("回复", "23486/32437：康复语境必须写「恢复」；「回复」是答复的意思（审核附言：此外：回复→恢复~）"),
 ]
 
 # 附言里不许出现的取证手段词（只写数据来源，不写怎么查到的）
+# 「回复/恢复」：只在康复语境判错，答复语境的「回复」放行
+# （审核附言 2026-11-16「此外：回复→恢复~」；用户明确要求不要误伤正常用法）
+_HF_REPLY = re.compile(r"^\s*(?:消息|玩家|评论|提问|问题|邮件|他人|对方|一下|框|栏|内容|签名)")
+_HF_HEAL_NEXT = re.compile(r"^\s*(?:[0-9０-９]|\[icon:|点|格|颗|生命|血量|饥饿|饱食|饱和度|护甲|盔甲|韧性|体力|魔法|耐久|法力)")
+_HF_HEAL_PREV = re.compile(r"(?:可|能|会|每秒|每\s*[0-9]+\s*秒|食用后|饮用后|使用后|治疗后|击杀后|杀死后)\s*$")
+
+
+def huifu_hits(text: str):
+    """返回疑似把「恢复」写成「回复」的片段（答复语境不算）。"""
+    out = []
+    for m in re.finditer("回复", text):
+        after = text[m.end():m.end() + 8]
+        before = text[max(0, m.start() - 6):m.start()]
+        if _HF_REPLY.match(after):
+            continue
+        if _HF_HEAL_NEXT.match(after) or _HF_HEAL_PREV.search(before):
+            out.append(text[max(0, m.start() - 10):m.end() + 10].replace("\n", " "))
+    return out
+
+
 FORBIDDEN_REMARK = ["反编译", "反混淆", "脚本导出", "抓包", "由我"]
 
 END_RE = re.compile(r"辛苦([喵呜娘]+)机了。?$")  # rules/02 §6.2.3 含「喵娘」特例
@@ -169,6 +188,8 @@ def audit_items(path):
                 blocks.append(f"[{name}] {k} base64 解码失败")
 
         # 5) 黑名单
+        for _frag in huifu_hits(txt):
+            blocks.append(f"[{name}] 「回复」应为「恢复」（康复语境：…{_frag}…；答复语境的「回复」不拦）")
         for word, why in BLACKLIST:
             if word in txt or word in remark:
                 blocks.append(f"[{name}] 命中黑名单「{word}」——{why}")
@@ -231,6 +252,8 @@ def audit_intro(path, data):
     for word, why in BLACKLIST:
         if word in txt:
             blocks.append(f"[介绍页] 命中黑名单「{word}」——{why}")
+    for _frag in huifu_hits(txt):
+        blocks.append(f"[介绍页] 「回复」应为「恢复」（康复语境：…{_frag}…）")
 
     h1 = len(re.findall(r"\[h1=", html))
     heads = len(re.findall(r"\[h[12]=", html))
