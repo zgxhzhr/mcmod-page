@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.49
+// @version      2.50
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -361,19 +361,27 @@
 
     // 无图标的条目也要勾选「删除大小图标」——不能只在有图标时才处理
     syncIconDeleteBoxes(!!it.icon32, !!it.icon128);
+    // v2.50（2026-11-16 审核附言）：没图标必须**显式清空** base64。
+    // 「删除小/大图标」勾选只负责「以后谁传了都不显示」，它删不掉编辑面板里
+    // 这次带进来的那张图；面板里残留上一张，提交就带着它一起走。所以一律走 clearOrSet。
+    clearOrSet(q('#icon-32x-editor'), it.icon32);
+    clearOrSet(q('#icon-32x'), it.icon32);
+    await sleep(400);
     if (it.icon32 || it.icon128) {
-      setVal(q('#icon-32x-editor'), it.icon32);
-      setVal(q('#icon-32x'), it.icon32);
-      await sleep(500);
       if (it.icon128) {
-        setVal(q('#icon-128x-editor'), it.icon128);
-        setVal(q('#icon-128x'), it.icon128);
+        clearOrSet(q('#icon-128x-editor'), it.icon128);
+        clearOrSet(q('#icon-128x'), it.icon128);
         await sleep(400);
       } else {
         const sync = [...document.querySelectorAll('button')].find((b) => (b.innerText || '').includes('同步至大图标'));
         if (sync) sync.click();
         await sleep(600);
       }
+    } else {
+      // 两张都没有：大图标栏同样显式清空
+      clearOrSet(q('#icon-128x-editor'), '');
+      clearOrSet(q('#icon-128x'), '');
+      await sleep(200);
     }
 
     // html 字段存在就写，空字符串表示「显式清空正文」

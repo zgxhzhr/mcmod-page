@@ -108,6 +108,20 @@ def audit_items(path):
     for idx, it in enumerate(data, 1):
         name = it.get("name", f"#{idx}")
 
+        # icon 标记空格（2026-11-16 审核附言）：`[icon:key=v, 点]` 逗号后要有空格；
+        # `[icon:` 左侧若是可见文字也要有空格。表格单元格（前面是 >）不要求。
+        h = it.get("html") or ""
+        for m in re.finditer(r"\[icon:[^\]]*\]", h):
+            s = m.group(0)
+            if re.search(r",\S", s):
+                blocks.append(f"[{name}] icon 标记逗号后缺空格：{s} —— 应写成 "
+                              f"{re.sub(r',(?=\S)', ', ', s)}")
+            i0 = m.start()
+            if i0 > 0 and h[i0 - 1] not in " \n>" and not s.startswith(" "):
+                blocks.append(f"[{name}] icon 标记左侧缺空格：…{h[max(0,i0-6):m.end()]} —— "
+                              f"前面应有一个半角空格")
+
+
         # 1) 字段顺序
         keys = list(it.keys())
         # 顺序只在「同时出现了白名单里靠前和靠后的字段」时提示，不阻断
