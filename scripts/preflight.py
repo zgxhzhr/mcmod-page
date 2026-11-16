@@ -237,6 +237,8 @@ def main() -> int:
                 continue
             # 版本号扫描先剥 [icon:…] 与标签：saturation-level=1.2 这类属性值不是版本
             _vp = re.sub(r"\[icon:[^\]]*\]", " ", re.sub(r"<[^>]+>", "", html))
+            # 带单位的小数不是版本：1.5 秒 / 4.8 点 / 12.5% / 24 格 / 0.6 倍 等
+            _vp = re.sub(r"\d+\.\d+(?=\s*(秒|分钟|刻|tick|点|格|%|倍|级|组|天|点伤害))", " ", _vp)
             for m in re.finditer(r"\b1\.\d{1,2}(?:\.\d{1,2})?\b", _vp):
                 versions_in_body.add(m.group(0))
             plain = re.sub(r"<[^>]+>", "", html)
