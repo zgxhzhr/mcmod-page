@@ -56,9 +56,20 @@ SYMMETRY = [
 ]
 # 口语化总结/定性句
 SUMMARY_VERBS = [
-    # 只保留真正的升华句式；「而不是 X」属于正常对比表达，不能算 AI 腔
+    # 只保留真正的升华句式。对比句式（「而不是 X」）单独在 CONTRAST 里算，
+    # 因为它是结构性 AI 味（§10.2.1）：单处可能是正常表达，成片出现才算。
     re.compile(r"(这就是|这便是)[^。]{2,30}(教学过程|意义|价值|灵魂|精髓)"),
     re.compile(r"(这不仅是|不仅仅是)[^。]{2,30}(更是|还是)[^。]{2,30}"),
+]
+# 对比句式（rules/03 §10.2.1）：制造读者没在想过的对立面。
+# 单处容忍（「耐久 260，铁为 250」这种正常对比），**同页 ≥2 处**才算结构性 AI 味。
+CONTRAST = [
+    re.compile(r"而不是[^，。；]{1,24}"),
+    re.compile(r"而非[^，。；]{1,20}"),
+    re.compile(r"并非[^，。；]{1,30}"),
+    re.compile(r"不是[^，。；]{1,20}[，,]\s*而是[^，。；]{1,24}"),
+    re.compile(r"不再(?:只是|是)[^，。；]{1,20}[，,]\s*而是[^，。；]{1,24}"),
+    re.compile(r"不是(?:简单的|单纯的|普通的)[^，。；]{1,20}"),
 ]
 # 三连排比 / 递进堆叠
 PARALLEL = [
@@ -206,6 +217,24 @@ def check(raw: str, page_type: str = "page") -> dict:
         add("排比/对称/定性句式", min(16, 4 * len(merged)),
             f"命中 {len(merged)} 处",
             [g.replace("\n", " ")[:50] for _, _, g in merged[:3]])
+
+    # 2.5 对比句式（结构性 AI 味）：同页 ≥2 处才计分，单处放过
+    cspans = []
+    for pat in CONTRAST:
+        for m in pat.finditer(plain):
+            cspans.append((m.start(), m.end(), m.group(0)))
+    cspans.sort()
+    cmerged = []
+    for s, e, g in cspans:
+        if cmerged and s < cmerged[-1][1]:      # 真重叠才合并（「不是X而是Y」会同时命中两条）
+            if e > cmerged[-1][1]:
+                cmerged[-1] = (cmerged[-1][0], e, cmerged[-1][2])
+        else:
+            cmerged.append((s, e, g))
+    if len(cmerged) >= 2:
+        add("对比句式", min(16, 4 * len(cmerged)),
+            f"命中 {len(cmerged)} 处「不是/而不是/并非 X」结构——制造读者没在想过的对立面",
+            [g.replace("\n", " ")[:46] for _, _, g in cmerged[:4]])
 
     # 3. 升华收尾（按段尾判断）
     sublime_hits = []
