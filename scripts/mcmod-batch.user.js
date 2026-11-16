@@ -202,20 +202,17 @@
   // 耐久度字段：站上 data-multi-id 名未公开核实，这里按「已知候选名 → 标签文本」两级探测，
   // 换站改字段名也不会静默丢数据（2026-11-16 审核附言：耐久度填到物品的耐久度选项里）
   function qDurability() {
-    // 实测（2026-11-16 截图）：耐久度在「扩展信息」页签，输入框 placeholder 是「最大耐久..」。
-    // 三级探测：placeholder → data-multi-id 候选 → 标签文本兜底。
+    // 2026-11-16 实测（probe-item-form.js 输出）：「最大耐久」就是 data-multi-id="damage"，
+    // 在「扩展信息」页签；damage 与 metadata（元数据）是两个不同字段。
+    const el = qm('damage');
+    if (el) return el;
+    // 兜底：站方若改名，按 placeholder / 候选名再找一次
     const byPh = [...document.querySelectorAll('input')]
-      .find((el) => /最大耐久|耐久/.test(el.getAttribute('placeholder') || ''));
+      .find((x) => /最大耐久|耐久/.test(x.getAttribute('placeholder') || ''));
     if (byPh) return byPh;
-    for (const k of ['durability', 'maxdamage', 'maxDurability', 'max_damage', 'maxdur']) {
-      const el = qm(k);
-      if (el) return el;
-    }
-    for (const m of [...document.querySelectorAll('label, th, td, span, dt, strong, div')]) {
-      if (!/最大耐久|耐久度/.test(m.textContent || '') || m.children.length > 2) continue;
-      const box = m.closest('tr, li, .form-group, .mb-3, .tab-pane') || m.parentElement;
-      const el = box && box.querySelector('input');
-      if (el) return el;
+    for (const k of ['durability', 'maxdamage', 'maxDurability']) {
+      const e2 = qm(k);
+      if (e2) return e2;
     }
     return null;
   }
@@ -357,7 +354,7 @@
     clearOrSet(qm('ename'), it.ename);
     clearOrSet(qm('regname'), it.regname);
     clearOrSet(qm('maxstack'), it.maxstack);
-    clearOrSet(qDurability(), it.durability);
+    clearOrSet(qDurability(), it.durability !== undefined ? it.durability : it.damage);
     clearOrSet(qm('damage'), it.damage);
     clearOrSet(qm('oredict'), it.oredict);
     setVal(qm('remark'), it.remark || ('批量录入 ' + classId));

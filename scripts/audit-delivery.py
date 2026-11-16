@@ -110,9 +110,11 @@ def audit_items(path):
             if not (it.get("ename") or "").strip():
                 warn(f"[{it.get('name','')}] 父资料次要名称（ename）为空 —— 审核要求成对写英文名（rules/06 §6.2.4）")
 
-    # durability：给了就必须是正整数（站上「耐久度」字段，2026-11-16）
+    # durability：给了就必须是正整数（站上「最大耐久」= data-multi-id="damage"，2026-11-16 实测）
     for it in items:
-        d = it.get("durability")
+        if it.get("durability") not in (None, "") and it.get("damage") not in (None, ""):
+            warn(f"[{it.get('name','')}] durability 与 damage 同时存在，damage 是同一字段的旧别名，建议只留 durability")
+        d = it.get("durability") if it.get("durability") not in (None, "") else it.get("damage")
         if d in (None, ""):
             continue
         try:
