@@ -253,7 +253,10 @@ def audit_items(path):
             if r > top:
                 top, pair = r, (a, b)
 
-    has_common_text = any(str(it.get("category") or "").strip() == "{文本}" for it in data)
+    def _is_textrow(it):
+        c = str(it.get("category") or "").strip()
+        return c == "{文本}" or (it.get("type") == "游戏设定" and not (it.get("regname") or "").strip())
+    has_common_text = any(_is_textrow(it) for it in data)
     if has_common_text:
         # 引用了通用文本时，各条正文本来就只剩「独有数据」，句子框架必然同构。
         # 这是 §6.1.9 的预期形态，不该按整页重复率判。

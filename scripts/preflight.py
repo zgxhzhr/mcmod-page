@@ -233,7 +233,7 @@ def main() -> int:
             continue
         for r in rows:
             html = r.get("html") or ""
-            if not html or str(r.get("category") or "").strip() == "{文本}":
+            if not html or str(r.get("category") or "").strip() == "{文本}" or r.get("type") == "游戏设定":
                 continue
             # 版本号扫描先剥 [icon:…] 与标签：saturation-level=1.2 这类属性值不是版本
             _vp = re.sub(r"\[icon:[^\]]*\]", " ", re.sub(r"<[^>]+>", "", html))
