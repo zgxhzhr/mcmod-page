@@ -235,7 +235,9 @@ def main() -> int:
             html = r.get("html") or ""
             if not html or str(r.get("category") or "").strip() == "{文本}":
                 continue
-            for m in re.finditer(r"\b1\.\d{1,2}(?:\.\d{1,2})?\b", html):
+            # 版本号扫描先剥 [icon:…] 与标签：saturation-level=1.2 这类属性值不是版本
+            _vp = re.sub(r"\[icon:[^\]]*\]", " ", re.sub(r"<[^>]+>", "", html))
+            for m in re.finditer(r"\b1\.\d{1,2}(?:\.\d{1,2})?\b", _vp):
                 versions_in_body.add(m.group(0))
             plain = re.sub(r"<[^>]+>", "", html)
             plain = re.sub(r"[^。；<]*\[icon:[^\]]*\][^。；]*[。；]?", "", plain)
