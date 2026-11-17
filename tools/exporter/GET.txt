@@ -1,0 +1,12 @@
+本目录只随本仓库分发**自研**文件（MIT）：
+  irr-mcauto-1.16.5-fix.jar        1.16.5 触发 mod（源码 irr-trigger/）
+  irr-1.7.10-mob-patch.jar         1.7.10 IRR 实体导出补丁（单 class；用法见内嵌 PATCH-INFO.txt）
+  src/                             上述两者的 Java 源码
+
+上游二进制（许可不归我们，请自行获取，别随 MIT 包再分发）：
+  IRR / IRR_V1.1.0_*               mcmod 官方 Item Render Rebirth —— CurseForge / mcmod.cn
+  IconRenderer-Fabric-*            GPL-3.0 fork 在 zgxhzhr/IconRenderer release fabric-all-mcauto
+  IconRenderer-Forge-*             上游 CurseForge 页
+  LetMeSeeSee-*                    LGPL-3.0 fork 在 zgxhzhr/LetMeSeeSee release mcauto-1.0.8
+
+本机流水线继续从技能目录 tools/exporter/ 使用这些 jar（本地运行副本，不随发布）。
