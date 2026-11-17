@@ -108,6 +108,13 @@ def audit_items(path):
     for idx, it in enumerate(data, 1):
         name = it.get("name", f"#{idx}")
 
+        # 主次名称相同（2026-11-17 29737 BUFF 事故：ename 误从 zh_cn 查，中文名写进了英文栏）
+        _nm = (it.get("name") or "").strip()
+        _en = (it.get("ename") or "").strip()
+        if _nm and _en and _nm == _en:
+            blocks.append(f"[{name}] 次要名称与主要名称相同（{_en}）——ename 应从 en_us 取，"
+                          f"或按 rules/04 §6.2.2.4 留空")
+
         # 单字段落：正文被错误地按字符拆成 <p>（2026-11-17 29737 结构页事故）
         _ps = re.findall(r"<p>(.*?)</p>", it.get("html") or "", re.S)
         _tiny = [p for p in _ps if 0 < len(re.sub(r"<[^>]+>", "", p).strip()) <= 2]
