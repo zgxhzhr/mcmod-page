@@ -117,6 +117,16 @@ def audit_items(path):
             if not _e.endswith("Blocks"):
                 warns.append(f"[{name}] 装饰方块父页次要名称宜为「XX Blocks」（当前 {_e or '空'}）")
 
+        # 综合身份声明必须打头（rules/05：父=「XX抽象父资料：」、子=「XX子资料（父资料：…」）
+        _rem = (it.get("remark") or "").strip()
+        if _rem and "功能：综合" in _rem:
+            _first = _rem.split("：", 1)[0][:40]
+            _is_par = not (it.get("regname") or "").strip() and (it.get("html") or "").strip()
+            if _is_par and "抽象父资料" not in _first:
+                blocks.append(f"[{name}] 父资料 remark 身份声明未置前：首句应为「XX抽象父资料：用于综合…」（当前 {it.get('name')}）")
+            if not _is_par and "子资料" not in _first:
+                blocks.append(f"[{name}] 子资料 remark 身份声明未置前：首句应为「XX子资料（父资料：…）」（当前 {it.get('name')}）")
+
         # 主次名称相同（2026-11-17 29737 BUFF 事故：ename 误从 zh_cn 查，中文名写进了英文栏）
         _nm = (it.get("name") or "").strip()
         _en = (it.get("ename") or "").strip()
@@ -140,7 +150,7 @@ def audit_items(path):
                 blocks.append(f"[{name}] icon 标记逗号后缺空格：{s} —— 应写成 "
                               f"{re.sub(r',(?=\S)', ', ', s)}")
             i0 = m.start()
-            if i0 > 0 and h[i0 - 1] not in " \n>" and not s.startswith(" "):
+            if i0 > 0 and h[i0 - 1] not in " \n>（(" and not s.startswith(" "):
                 blocks.append(f"[{name}] icon 标记左侧缺空格：…{h[max(0,i0-6):m.end()]} —— "
                               f"前面应有一个半角空格")
 
