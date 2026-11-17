@@ -108,6 +108,15 @@ def audit_items(path):
     for idx, it in enumerate(data, 1):
         name = it.get("name", f"#{idx}")
 
+        # 装饰方块父页命名：抽象父（无注册名）+ 分类含「装饰方块」应是「XX装饰方块 / XX Blocks」
+        _cat = str(it.get("category") or "")
+        if not (it.get("regname") or "").strip() and "装饰方块" in _cat:
+            _n, _e = (it.get("name") or "").strip(), (it.get("ename") or "").strip()
+            if not _n.endswith("装饰方块"):
+                warns.append(f"[{name}] 装饰方块父页主要名称宜为「XX装饰方块」（当前 {_n}）")
+            if not _e.endswith("Blocks"):
+                warns.append(f"[{name}] 装饰方块父页次要名称宜为「XX Blocks」（当前 {_e or '空'}）")
+
         # 主次名称相同（2026-11-17 29737 BUFF 事故：ename 误从 zh_cn 查，中文名写进了英文栏）
         _nm = (it.get("name") or "").strip()
         _en = (it.get("ename") or "").strip()
