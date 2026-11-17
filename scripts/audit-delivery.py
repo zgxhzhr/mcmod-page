@@ -108,6 +108,13 @@ def audit_items(path):
     for idx, it in enumerate(data, 1):
         name = it.get("name", f"#{idx}")
 
+        # 单字段落：正文被错误地按字符拆成 <p>（2026-11-17 29737 结构页事故）
+        _ps = re.findall(r"<p>(.*?)</p>", it.get("html") or "", re.S)
+        _tiny = [p for p in _ps if 0 < len(re.sub(r"<[^>]+>", "", p).strip()) <= 2]
+        if len(_tiny) >= 3:
+            blocks.append(f"[{name}] 正文被拆成单字段落（{len(_tiny)} 个 ≤2 字符的 <p>）——"
+                          f"检查生成脚本是否对字符串做了逐字符迭代")
+
         # icon 标记空格（2026-11-16 审核附言）：`[icon:key=v, 点]` 逗号后要有空格；
         # `[icon:` 左侧若是可见文字也要有空格。表格单元格（前面是 >）不要求。
         h = it.get("html") or ""
