@@ -73,67 +73,62 @@ python doctor.py          # 环境 / 启动器 / 工具 jar / 网络 四类逐�
 
 ### 支持矩阵（全部实测）
 
-| MC / 加载器 | 导出工具 | 进世界方式 | 状态 |
-|---|---|---|---|
-| **1.21.1 NeoForge** | LetMeSeeSee（fork） | `--quickPlaySingleplayer` | ✅ 物品 + 实体 |
-| **1.20.1 Forge** | IconRenderer-Forge | `--quickPlaySingleplayer` | ✅（agent 需 ≥2026-11-16：context loader 切换 + needsWorld 门控，旧 agent 在 mod loading 期反射触发 transformer 崩） |
-| **1.20.1 Fabric** | IconRenderer（fork） | `--quickPlaySingleplayer` | ✅ |
-| **1.19.2 Forge** | IconRenderer-Forge | 本地服务端 + `--server` | ✅ |
-| **1.19.2 Fabric** | IconRenderer（fork） | 本地服务端 + `--server` | ✅ |
-| **1.18.2 Forge** | IconRenderer-Forge | 本地服务端 + agent | ✅ |
-| **1.18.2 Fabric** | IconRenderer（fork） | 本地服务端 + `--server` | ✅ |
-| **1.16.5 Forge** | IRR-1.0-1.16.X | **mod 打开 ConnectingScreen** | ✅ |
-| **1.16.5 Fabric** | IconRenderer（fork） | 本地服务端 + 模组自连 | ✅ |
-| **1.12.2 Forge** | IRR_V1.1.0 | **mod 调 launchIntegratedServer** | ✅ |
-| **1.7.10 Forge** | IRR_V1.1.0 | **mod 调 launchIntegratedServer** | ✅ |
+导出工具是**自研的 meowarchive（喵呜档案导出机，MIT）**，覆盖 **25 个 MC 版本 / 77 个 jar**，
+发布在 [zgxhzhr/meowarchive](https://github.com/zgxhzhr/meowarchive)（每个 MC 版本一个 tag）。
+jar 名唯一规律：`meowarchive-<loader>-<MC版本>-<工具版本>.jar`。
 
-`1.16.5` 及更早的 Forge 必须走 **mod 侧集成**——原因是这些版本没有
-`--quickPlaySingleplayer`，而 1.12.2/1.7.10 连 MC 类名都是混淆的
-（`Minecraft` 叫 `bib`），javaagent 按名反射拿不到任何东西。
-三个 mod 工程在 `scripts/mcauto/world-mod*/`，各自 README 记了完整的坑。
+| MC | 加载器 | 该版本最新 |
+|---|---|---|
+| 1.7.10 / 1.8.9 / 1.12.2 / 1.13.2 | forge | 1.0.0 |
+| 1.14.4 / 1.15.2 / 1.17.1 / 1.18.2 | fabric + forge | 1.0.0 / 1.0.1 |
+| 1.16.5 / 1.19.2 / 1.19.3 / 1.19.4 / 1.20.1 | fabric + forge | 1.0.1 |
+| 1.20.2 / 1.20.4 / 1.20.6 | fabric + forge + neoforge | 1.0.1 |
+| **1.21.1** | **fabric + neoforge** | **1.3.2**（唯一迭代到 1.3.x） |
+| 1.21.2 | fabric + neoforge | 1.0.2 |
+| 1.21.4 / 1.21.5 / 1.21.8 / 1.21.10 / 1.21.11 | fabric + forge + neoforge | 1.0.0 |
+| 26.1.2 / 26.2 / 26.3 | fabric + neoforge | 1.0.0 |
+
+> 各版本号就是该 MC 版本自己的最新版，不是半成品。
+> **2026-11-24 起旧的第三方导出器（IRR / IconRenderer / LMS）全部退休**——它们的许可不允许随本仓库分发，
+> 而 meowarchive 已经覆盖这些版本。历史用法与许可边界见 [THIRD-PARTY.md](THIRD-PARTY.md)。
 
 ### 一条命令
 
-```powershell
-# 单个模组（缺前置会自动补）
-python scripts\mcauto\autodeps.py `
-    --version "1.20.1-Forge_47.4.26" --mode iconr `
-    --target-modid malstone `
-    --mods tool.jar target.jar `
-    --work D:\tmp\run --mc 1.20.1 --loader forge
+meowarchive 自带自动导出钩子：进世界后自动跑一次，导完自动关客户端，**不用点 GUI**。
 
-# 批量
-python scripts\mcauto\batch.py --jobs jobs.json --out D:\handover
+```python
+import launcher  # scripts/mcauto/launcher.py
+
+argv = launcher.build(
+    MC, "1.21.1-NeoForge_21.1.255", GAME, "mcauto", launcher.find_java(VER),
+    ["-Dmeowarchive.autoNamespace=<modid>", "-Dmeowarchive.autoExit=true"],
+    854, 480, None, None,
+)
+argv += ["--quickPlaySingleplayer", "<存档名>"]
 ```
 
-`jobs.json`：
+目标模组的**硬依赖要一起放进 `mods/`**（缺前置时客户端会直接卡在
+「1 error has occurred」的加载错误页，不会进世界）。
 
-```json
-[
-  {
-    "jar": "路径\\模组.jar",
-    "tools": ["路径\\IconRenderer-Forge-1.20.1-1.2.0.jar"],
-    "mc": "1.20.1", "loader": "forge",
-    "version": "1.20.1-Forge_47.4.26",
-    "mode": ["iconr"]
-  }
-]
-```
+批量目前是逐模组跑——meowarchive 一次只导一个命名空间。
 
 ### 交付目录结构
 
 ```
-<out>/
-├ <modid>/
-│   ├ manifest.json                          这个模组用了什么、几条、多大、耗时
-│   └ native/
-│       ├ lms/let_me_see_see/
-│       │   ├ <modid>.json                   物品（站方格式）
-│       │   └ _icons/<modid>/*.png           手工覆盖图标（可选）
-│       └ lmsent/let_me_see_see/
-│           └ <modid>_entity.json            实体
-└ manifest.jsonl                            全部模组的汇总
+<game>/meowarchive-export/
+├ status.json                                导出状态（DONE / 失败与可疑计数）
+├ failures.txt                               失败/无可视图/可疑明细，无异常时不生成
+└ <ns>/
+    ├ <ns>_items.json                        JSONL，LMS 字段
+    ├ <ns>_entities.json                     JSONL，LMS 字段
+    ├ <ns>_effects.json                      JSONL，本项目扩展（BUFF / DEBUFF）
+    ├ <ns>_all.json                          合并并附加 kind（只给本地读，不交站方）
+    ├ preview.html                           单文件预览页，图标内嵌
+    └ icons/<path>_32.png、_128.png
 ```
+
+读产物统一走 `scripts/meowarchive_io.py`：它抹平 items `englishName`（小写 e）与
+entities `Englishname`（大写 E）的差异，优先读 `_all.json`，没有就回落三个分文件。
 
 **不做任何格式转换** —— 工具输出什么就交什么，站方直接吃。
 
@@ -160,14 +155,14 @@ python scripts\mcauto\batch.py --jobs jobs.json --out D:\handover
 - **autodeps 会误判**：模组自己抛的 `ClassNotFoundException`（如 LMS 的 `LMSAgent`）不是缺依赖 → 加三道防线（已安装包过滤 / 无意义词过滤 / 下载后校验 jar 里真有那个包）
 - **光标会消失**：GLFW 用 `ShowCursor(FALSE)` 把内部计数器压成负数，固定调几次没用 → 循环到返回值 ≥ 0，并在退出路径强制恢复
 
-### 两个 fork（改过才能自动化）
+### 已退休：两个 fork（2026-11-24 起不再使用）
 
-| fork | 改了什么 | 许可 |
-|---|---|---|
-| [LetMeSeeSee](https://github.com/zgxhzhr/LetMeSeeSee) | 新增实体图标导出 + 给自动化用的静态入口 | LGPLv3 |
-| [IconRenderer](https://github.com/zgxhzhr/IconRenderer) | 补了缺失的构建配置 + 自触发入口（Fabric） | GPL-3.0 |
+| fork | 当年改了什么 | 许可 | 现状 |
+|---|---|---|---|
+| [LetMeSeeSee](https://github.com/zgxhzhr/LetMeSeeSee) | 新增实体图标导出 + 给自动化用的静态入口 | LGPLv3 | 被 meowarchive 取代 |
+| [IconRenderer](https://github.com/zgxhzhr/IconRenderer) | 补了缺失的构建配置 + 自触发入口（Fabric） | GPL-3.0 | 被 meowarchive 取代 |
 
-两者都是 copyleft，分发时必须连源码一起给。
+两者都是 copyleft，分发时必须连源码一起给——这正是改用自研 meowarchive 的原因之一。
 
 ### 手工覆盖图标
 
@@ -268,7 +263,8 @@ git -c http.proxy= -c https.proxy= push origin main
 - **GPL/LGPL 二进制只发在各自 fork 的 release 里**，不在本仓库：
   - [LetMeSeeSee · mcauto-1.0.8](https://github.com/zgxhzhr/LetMeSeeSee/releases/tag/mcauto-1.0.8)
   - [IconRenderer · fabric-all-mcauto](https://github.com/zgxhzhr/IconRenderer/releases/tag/fabric-all-mcauto)
-- 本仓库 release 只放 MIT 产物：流水线包 + 三个 world mod
+- **导出器 meowarchive 是自研 MIT**，发布在[独立仓库](https://github.com/zgxhzhr/meowarchive)，不在本仓库 release
+- 本仓库 release 只放 MIT 产物：流水线包（world mod 已随 IRR 路径一起退役）
 - `examples/` 中的模组名/图标版权属原作者，不在 MIT 范围内
 
 完整边界见 [THIRD-PARTY.md](THIRD-PARTY.md)。

@@ -43,8 +43,8 @@ MIT 与 GPL 可以在**同一个项目页面聚合**（aggregation），但不�
 | `mcauto-world-1.16.5.jar` / `-1.12.2.jar` / `-1.7.10.jar` | MIT（我们的原创 mod） | 同上 |
 | `let_me_see_see-*.jar` | LGPL-3.0 | `zgxhzhr/LetMeSeeSee` release |
 | `IconRenderer-Fabric-*-mcauto.jar` | GPL-3.0 | `zgxhzhr/IconRenderer` release |
-| `irr-1.7.10-mob-patch.jar`（2026-11-17） | **MIT**（单个自研类 MobExport，非 IRR 衍生；内嵌用法说明） | 本仓库 `tools/exporter/`；合入上游 IRR 的动作由使用者本地执行，见 GET.txt |
-| `mcauto-world-1.7.10-mob.jar`（2026-11-17） | **MIT**（我们的触发 mod 改版） | 本仓库 `tools/exporter/` |
+| `meowarchive-<loader>-<MC版本>-<ver>.jar`（2026-11-24 起，25 个版本） | **MIT** | [zgxhzhr/meowarchive](https://github.com/zgxhzhr/meowarchive) 的 release（独立仓库，独立版本线） |
+| ~~`irr-1.7.10-mob-patch.jar`~~ / ~~`mcauto-world-1.7.10-mob.jar`~~ | 已退役（2026-11-24） | 已从本仓库删除；被 meowarchive 替代 |
 
 我们的三个 world mod 只 `import` Forge 的 API 类，**jar 内不含 Forge 代码**，
 因此可以作为独立作品以 MIT 发布。
@@ -53,8 +53,9 @@ MIT 与 GPL 可以在**同一个项目页面聚合**（aggregation），但不�
 （IRR 全系、IconRenderer、LetMeSeeSee 1.0.7）随 toolchain zip 一起分发——
 与本文件的口径冲突，已从仓库与 release 剔除（v2.8 zip 重新打过）。
 上游件获取方式与 patch 用法统一写在 `tools/exporter/GET.txt`。
-IRR 1.7.10 实体导出的正确分发形态 = 纯自研 `irr-1.7.10-mob-patch.jar` + 源码 + 一行合并指令，
-不是 IRR 的修改版 jar。
+**2026-11-24 再修正**：自研 meowarchive 已覆盖 1.7.10 ~ 26.3 全部目标版本（含实体与 BUFF），
+`tools/exporter/` 下的补丁 jar 与 world-mod jar 全部退役删除，仓库只保留源码与 `GET.txt` 作历史记录；
+`tools/exporter/*.jar` 已加入 `.gitignore`，防止再被误提交。
 
 ## 四、例外：`examples/` 里的第三方内容
 
