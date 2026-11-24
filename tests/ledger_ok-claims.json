@@ -1,0 +1,1 @@
+[{"match": "半径 48 格", "class": "FakeBattleHandler", "constant": "ARENA_HALF", "value": "48.0"}, {"match": "每 60 秒补充 20 名兵员", "class": "FakeBattleHandler", "constant": "WAVE_SIZE", "value": "20"}]

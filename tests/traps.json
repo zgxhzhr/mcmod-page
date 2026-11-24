@@ -1,0 +1,70 @@
+[
+ {
+  "name": "fabricated_numbers",
+  "expect": "FAIL",
+  "html": "<p>入侵以 13 天为周期循环：每天 16:00，处于地表的玩家有 12.5% 概率触发一波入侵。</p>",
+  "why": "29737 事故：12.5% 在整个 jar 里不存在"
+ },
+ {
+  "name": "grounded_numbers",
+  "expect": "PASS",
+  "html": "<p>战场以头目为中心、半径 48 格；每 60 秒补充 20 名兵员。</p>",
+  "why": "对照组：48 / 20 都在 FakeBattleHandler 里"
+ },
+ {
+  "name": "invented_faction",
+  "expect": "FAIL",
+  "html": "<p>编入巡逻舰队，从水面或水下接近目标。</p>",
+  "why": "29737 事故：我自己发明的建制词「舰队」"
+ },
+ {
+  "name": "faction_grounded",
+  "expect": "PASS",
+  "html": "<p>你遭遇了亡灵大军；亡灵统领麾下的兵员由原版僵尸与骷髅组成。</p>",
+  "why": "对照组：亡灵大军来自 lang/源码字符串"
+ },
+ {
+  "name": "ledger_mismatch",
+  "expect": "FAIL",
+  "rows": [
+   {
+    "name": "测试页",
+    "html": "<p>战场以头目为中心、半径 48 格。</p>"
+   }
+  ],
+  "claims": [
+   {
+    "match": "半径 48 格",
+    "class": "FakeBattleHandler",
+    "constant": "ARENA_HALF",
+    "value": "64.0"
+   }
+  ],
+  "why": "台账写 64，源码是 48 → 必须拦下"
+ },
+ {
+  "name": "ledger_ok",
+  "expect": "PASS",
+  "rows": [
+   {
+    "name": "测试页",
+    "html": "<p>战场以头目为中心、半径 48 格；每 60 秒补充 20 名兵员。</p>"
+   }
+  ],
+  "claims": [
+   {
+    "match": "半径 48 格",
+    "class": "FakeBattleHandler",
+    "constant": "ARENA_HALF",
+    "value": "48.0"
+   },
+   {
+    "match": "每 60 秒补充 20 名兵员",
+    "class": "FakeBattleHandler",
+    "constant": "WAVE_SIZE",
+    "value": "20"
+   }
+  ],
+  "why": "对照组：台账与常量一致"
+ }
+]
