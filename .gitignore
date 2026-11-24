@@ -6,3 +6,6 @@ _diff/
 # 构建中间产物（agent jar 由 build_agent.py 生成后保留，编译类不留）
 scripts/mcauto/agent-build/
 *.class
+
+# 导出器：meowarchive 接管（自研 MIT）。上游/补丁 jar 一律不入库（许可不允许分发）
+tools/exporter/*.jar
