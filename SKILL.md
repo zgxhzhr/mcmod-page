@@ -186,6 +186,7 @@ Select-String -Path rules\*.md,SKILL.md -Pattern '关键词'
 | `scripts/preflight.py` | **交付总闸**：一次跑完 audit + 多余描述扫描 + 核对「规则块阅读声明」 |
 | `scripts/check-page-structure.py` | 结构自检：跨级标题、标签闭合、不支持标签 |
 | `scripts/ai-tell-check.py` | AI 味评分 |
+| `scripts/meowarchive_io.py` | 读 meowarchive 导出产物（抹平 items `englishName` / entities `Englishname` 的大小写差异，支持 `_all.json`） |
 | `scripts/render-mc-model.py` | 方块/模型立体渲染 |
 | `scripts/render-block-iso.py` | 简单方块等轴测 |
 | `scripts/md2mcmod.py` | Markdown → 百科 HTML |
