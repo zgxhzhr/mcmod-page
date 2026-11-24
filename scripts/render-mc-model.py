@@ -44,6 +44,11 @@ class AssetSource:
             p = root / "assets" / ns / "textures" / f"{path}.png"
             if p.exists():
                 img = Image.open(p).convert("RGBA")
+                # 动图贴图（同名 .png.mcmeta）是多帧竖排，UV 只对得上单帧；
+                # 不裁首帧会把整条帧带当贴图，纹理就会错位/拉伸。
+                meta = p.with_suffix(".png.mcmeta")
+                if meta.exists() and img.height > img.width and img.height % img.width == 0:
+                    img = img.crop((0, 0, img.width, img.width))
                 self.cache[ref] = img
                 return img
         self.cache[ref] = None
@@ -53,8 +58,10 @@ class AssetSource:
         ns, _, path = ref.partition(":")
         if not path:
             ns, path = "minecraft", ref
+        # 兼容两种 parent 写法：「ns:block/foo」与「ns:models/block/foo」（后者已含 models/ 前缀）
+        rel = Path(path) if path.startswith("models/") else Path("models") / path
         for root in self.roots:
-            p = root / "assets" / ns / "models" / f"{path}.json"
+            p = root / "assets" / ns / rel.with_suffix(".json")
             if p.exists():
                 return json.loads(p.read_text(encoding="utf-8"))
         return None
@@ -212,12 +219,16 @@ def draw_quad(canvas, tex_img, uv, dst_pts, brightness):
 
 FACE_DEFS = {
     # face: (顶点顺序基于 from/to, 亮度)
+    # 顺序必须与 draw_quad 的 src 一致：纹理左上 → 右上 → 右下 → 左下。
+    # 纹理 v 轴向下（v1 是面的上方），所以每个面都要「先上后下」排点；
+    # 早期版本侧面写成「先下后上」，导致所有方块的侧面纹理上下颠倒
+    # （木桶的铁箍跑到桶身下沿即为该问题的表现）。
     "up":    (lambda f, t: [(f[0], t[1], f[2]), (t[0], t[1], f[2]), (t[0], t[1], t[2]), (f[0], t[1], t[2])], 1.00),
-    "down":  (lambda f, t: [(f[0], f[1], f[2]), (t[0], f[1], f[2]), (t[0], f[1], t[2]), (f[0], f[1], t[2])], 0.55),
-    "north": (lambda f, t: [(f[0], f[1], f[2]), (t[0], f[1], f[2]), (t[0], t[1], f[2]), (f[0], t[1], f[2])], 0.80),
-    "south": (lambda f, t: [(t[0], f[1], t[2]), (f[0], f[1], t[2]), (f[0], t[1], t[2]), (t[0], t[1], t[2])], 0.80),
-    "west":  (lambda f, t: [(f[0], f[1], t[2]), (f[0], f[1], f[2]), (f[0], t[1], f[2]), (f[0], t[1], t[2])], 0.65),
-    "east":  (lambda f, t: [(t[0], f[1], f[2]), (t[0], f[1], t[2]), (t[0], t[1], t[2]), (t[0], t[1], f[2])], 0.65),
+    "down":  (lambda f, t: [(f[0], f[1], t[2]), (t[0], f[1], t[2]), (t[0], f[1], f[2]), (f[0], f[1], f[2])], 0.55),
+    "north": (lambda f, t: [(f[0], t[1], f[2]), (t[0], t[1], f[2]), (t[0], f[1], f[2]), (f[0], f[1], f[2])], 0.80),
+    "south": (lambda f, t: [(t[0], t[1], t[2]), (f[0], t[1], t[2]), (f[0], f[1], t[2]), (t[0], f[1], t[2])], 0.80),
+    "west":  (lambda f, t: [(f[0], t[1], t[2]), (f[0], t[1], f[2]), (f[0], f[1], f[2]), (f[0], f[1], t[2])], 0.65),
+    "east":  (lambda f, t: [(t[0], t[1], t[2]), (t[0], t[1], f[2]), (t[0], f[1], f[2]), (t[0], f[1], t[2])], 0.65),
 }
 
 
@@ -229,11 +240,43 @@ def render(model_ref: str, assets: AssetSource, size=128, margin=1.06, span_mode
         return None
     textures = data.get("textures", {})
 
+    def _nums(v):
+        out = []
+        for x in v:
+            try:
+                out.append(float(x))
+            except (TypeError, ValueError):
+                return None
+        return out
+    _els = []
+    for el in elements:
+        f = _nums(el.get("from", []))
+        o = _nums(el.get("to", []))
+        if f is None or o is None:
+            continue  # 变量驱动几何（BC engine progress 等），静态出图无法还原
+        el = dict(el)
+        el["from"], el["to"] = f, o
+        _els.append(el)
+    elements = _els
+
     def texref(fdef):
         t = fdef.get("texture", "")
-        while isinstance(t, str) and t.startswith("#"):
-            t = textures.get(t[1:], t)
-        return t
+        # BC 风格模型：face texture 是表达式字符串（"'#back'"、变量名 trunk_tex）。
+        # 静态出图规整：剥单引号；已知变量按默认档求值（trunk_tex → 蓝档 trunk）。
+        if isinstance(t, str):
+            t = t.strip()
+            if t.startswith("'") and t.endswith("'"):
+                t = t[1:-1]
+            elif t == "trunk_tex":
+                t = "#trunk_blue"
+        seen = set()
+        while isinstance(t, str) and t.startswith("#") and t not in seen:
+            seen.add(t)
+            nxt = textures.get(t[1:], textures.get(t, ""))
+            if not nxt or nxt == t:
+                break
+            t = nxt
+        return t if isinstance(t, str) and not t.startswith("#") else ""
 
     # 超采样倍率：目标越小，倍率越高，最后一次性缩到目标尺寸
     # （多次缩放会累积模糊，尤其 512→128→32 这种）

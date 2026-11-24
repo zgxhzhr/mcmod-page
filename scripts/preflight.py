@@ -208,7 +208,11 @@ def main() -> int:
             infos.append(f"证据表 {len(ev)} 条，其中已验证 {sum(1 for _, _, s in ev if s.startswith('已验证'))} 条")
 
     # ③ 自动检查
-    files = sorted(p for p in d.glob("*.json") if not p.name.startswith("."))
+    # 只审计资料页批量包；断言台账(claims-*)、导出原始数据等辅助 JSON 不参与
+    SKIP_PREFIX = ("claims-", "claims_", "export-", "_")
+    files = sorted(p for p in d.glob("*.json")
+                   if not p.name.startswith(".")
+                   and not p.name.startswith(SKIP_PREFIX))
     if not files:
         blocks.append("目录里没有 JSON")
     for f in files:

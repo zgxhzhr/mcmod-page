@@ -127,6 +127,41 @@ def audit_items(path):
             if not _is_par and "子资料" not in _first:
                 blocks.append(f"[{name}] 子资料 remark 身份声明未置前：首句应为「XX子资料（父资料：…）」（当前 {it.get('name')}）")
 
+        # 设定页含数字断言 → 提醒在 README 证据表登记「类.常量 = 值」
+        _h4 = it.get("html") or ""
+        if it.get("type") == "游戏设定" and _h4:
+            _nums = re.findall(r"\d+(?:\.\d+)?", re.sub(r"<[^>]+>", "", _h4))
+            if len(_nums) >= 3:
+                warns.append(f"[{name}] 设定页含 {len(_nums)} 处数字断言（{', '.join(_nums[:6])}…）——"
+                             f"逐条在 README 证据表登记「类.常量 = 值 」，写不出源码出处的删掉（rules/09）")
+
+        # 阵营断言缺证据（rules/09）：正文称「亡灵大军/军团/不死单位」但注册名无 undead 依据
+        _h3 = it.get("html") or ""
+        _rg = (it.get("regname") or "").lower()
+        if _h3 and re.search(r"亡灵大军|亡灵军团|不死单位|不死军团", _h3):
+            if not re.search(r"undead|zombie|skeleton|revenant|wraith|ghost", _rg):
+                blocks.append(f"[{name}] 阵营断言缺证据：正文称「亡灵」，注册名 {_rg or '(空)'} 无 undead 类前缀——"
+                              f"先确认其所属池/枚举（rules/09 阵营归属判据）")
+
+        # 首段只写名称 = 审核附言「第一行多余，不用重复写一遍物品名称」（2026-11-17 九条退回）
+        _h2 = it.get("html") or ""
+        if _h2:
+            _ps = re.findall(r"<p>(.*?)</p>", _h2)
+            if _ps:
+                _fp = re.sub(r"<[^>]+>", "", _ps[0]).strip()
+                _nm = (it.get("name") or "").strip()
+                if _nm and (_fp == _nm or _fp == _nm + "：" or _fp == _nm + ":"):
+                    blocks.append(f"[{name}] 首段只有物品名称（「{_fp}」）——审核附言明确「第一行多余，"
+                                  f"不用重复写一遍物品名称」，首段直接写功能/形态")
+
+        # 耐久应进 durability 字段，不在正文重复（rules/04 §6.5.1，2026-11-17 9120 实测）
+        _h = it.get("html") or ""
+        if _h and not it.get("durability"):
+            _m = re.search(r"耐久\s*[:：]?\s*\d+", _h)
+            if _m:
+                blocks.append(f"[{name}] 正文写了耐久数值（{_m.group(0)}）但 durability 字段为空——"
+                              f"耐久是站点字段，应填 JSON 的 durability，正文不重复")
+
         # 主次名称相同（2026-11-17 29737 BUFF 事故：ename 误从 zh_cn 查，中文名写进了英文栏）
         _nm = (it.get("name") or "").strip()
         _en = (it.get("ename") or "").strip()

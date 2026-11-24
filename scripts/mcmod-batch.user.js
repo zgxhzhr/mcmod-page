@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MC百科 批量新增资料（通用）
 // @namespace    local.mcmod.batchadd
-// @version      2.50
+// @version      2.55
 // @description  /item/add/* 批量新增；/item/list/* 读取列表；/item/edit/* 批量编辑资料；/class/edit/* 模组介绍再编辑
 // @match        https://www.mcmod.cn/item/add/*
 // @match        https://www1.mcmod.cn/item/add/*
@@ -21,7 +21,7 @@
   'use strict';
 
   // 面板显示用的版本号：只在这里改，三处面板共用
-  const MB_VERSION = '2.50';
+  const MB_VERSION = '2.55';
 
   // 批量编辑队列：键与读写函数必须放在最前，
   // 因为列表页分支在 IIFE 开头就会执行（放在后面会命中 const 的暂时性死区）
@@ -199,22 +199,34 @@
   function q(sel) { return document.querySelector(sel); }
   function qm(k) { return document.querySelector('[data-multi-id="' + k + '"]'); }
 
-  // 耐久度字段：站上 data-multi-id 名未公开核实，这里按「已知候选名 → 标签文本」两级探测，
-  // 换站改字段名也不会静默丢数据（2026-11-16 审核附言：耐久度填到物品的耐久度选项里）
-  function qDurability() {
-    // 2026-11-16 实测（probe-item-form.js 输出）：「最大耐久」就是 data-multi-id="damage"，
-    // 在「扩展信息」页签；damage 与 metadata（元数据）是两个不同字段。
-    const el = qm('damage');
-    if (el) return el;
-    // 兜底：站方若改名，按 placeholder / 候选名再找一次
-    const byPh = [...document.querySelectorAll('input')]
-      .find((x) => /最大耐久|耐久/.test(x.getAttribute('placeholder') || ''));
-    if (byPh) return byPh;
-    for (const k of ['durability', 'maxdamage', 'maxDurability']) {
-      const e2 = qm(k);
-      if (e2) return e2;
+  // 扩展字段解析：站上 data-multi-id 可能挂在**容器 div** 上（不是 input 本身），
+  // 直接 setVal 容器 = 静默无效（2026-11-17 用户实测：同页 maxstack/regname 能填，
+  // damage(最大耐久)/oredict(矿物词典) 填不上 → 容器结构）。统一走 resolveInput。
+  function innerInput(el) {
+    if (!el) return null;
+    if (el.matches && el.matches('input,textarea,select')) return el;
+    const inside = el.querySelector && el.querySelector('input,textarea,select');
+    return inside || null;
+  }
+  function findByPh(re) {
+    const el = [...document.querySelectorAll('input,textarea')]
+      .find((x) => re.test((x.getAttribute('placeholder') || '') + (x.name || '') + (x.id || '')));
+    return el || null;
+  }
+  /** 按候选 data-multi-id → 内层 input → placeholder 三级解析 */
+  function resolveExt(keys, phRe) {
+    for (const k of keys) {
+      const hit = innerInput(qm(k));
+      if (hit) return hit;
     }
-    return null;
+    return findByPh(phRe);
+  }
+  function qDurability() {
+    // 2026-11-16 probe：最大耐久 = data-multi-id="damage"（在「扩展信息」页签）
+    return resolveExt(['damage', 'maxdamage', 'maxDurability', 'duration', 'max_damage'], /最大耐久|耐久度|耐久/);
+  }
+  function qOredict() {
+    return resolveExt(['oredict', 'ore_dictionary', 'oredicts'], /矿物词典|矿物辞|ore\s*dict/i);
   }
 
   function setVal(el, v) {
@@ -237,6 +249,21 @@
       return true;
     }
     return setVal(el, v);
+  }
+
+  /** 扩展字段所在页签可能是懒渲染：解析不到就点开含「扩展」的页签再试一次 */
+  async function ensureExtendTab() {
+    const cands = [...document.querySelectorAll('a,li,div,span,button')].filter((el) => {
+      const t = (el.innerText || '').trim();
+      if (!/扩展|更多信息|附加信息/.test(t) || t.length > 12) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    if (!cands.length) return false;
+    cands.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+    cands[0].click();
+    await sleep(450);
+    return true;
   }
 
   function findConfirm() {
@@ -354,9 +381,20 @@
     clearOrSet(qm('ename'), it.ename);
     clearOrSet(qm('regname'), it.regname);
     clearOrSet(qm('maxstack'), it.maxstack);
-    clearOrSet(qDurability(), it.durability !== undefined ? it.durability : it.damage);
-    clearOrSet(qm('damage'), it.damage);
-    clearOrSet(qm('oredict'), it.oredict);
+    let durEl = qDurability(), odEl = qOredict();
+    if (!durEl || !odEl) {
+      const opened = await ensureExtendTab();
+      if (opened) { durEl = qDurability(); odEl = qOredict(); }
+    }
+    const _durV = it.durability !== undefined ? it.durability : it.damage;
+    if (!durEl && _durV) log('⚠ 最大耐久字段未找到（值 ' + _durV + ' 未写入）——点「诊断字段」发我结果', '#f87171');
+    if (!odEl && it.oredict) log('⚠ 矿物词典字段未找到（值 ' + it.oredict + ' 未写入）', '#f87171');
+    // 注意：qDurability() 的候选第一名就是 [data-multi-id="damage"]，与 qm('damage') 是
+    // 同一个 input。以前这里再写一行 clearOrSet(qm('damage'), it.damage)：JSON 用 durability
+    // 字段时 it.damage 为 undefined → 刚写入的耐久被这一行立即清空（2026-11-17 实测）。
+    // 现在只写一次，且兼容只用 damage 字段的旧数据。
+    clearOrSet(durEl, _durV);
+    clearOrSet(odEl, it.oredict);
     setVal(qm('remark'), it.remark || ('批量录入 ' + classId));
 
     // 无图标的条目也要勾选「删除大小图标」——不能只在有图标时才处理
@@ -512,12 +550,31 @@
       '<button id="mb-run">开始批量</button>' +
       '<button id="mb-stop">暂停</button>' +
       '<button id="mb-reset">重置</button>' +
+      '<button id="mb-diag">诊断字段</button>' +
       '</div>' +
       '<div id="mb-log"></div>';
     document.body.appendChild(d);
     makeCollapsible(d, '#mb-head', null, 'add');
 
     q('#mb-close').onclick = () => { d.style.display = 'none'; };
+    if (q('#mb-diag')) q('#mb-diag').onclick = () => {
+      const desc = (e) => e ? (e.tagName + (e.id ? '#' + e.id : '') +
+        ' name=' + (e.name || '-') + ' ph=' + (e.getAttribute('placeholder') || '-')) : '未找到';
+      const lines = [];
+      lines.push('location: ' + location.href);
+      const mids = [...document.querySelectorAll('[data-multi-id]')]
+        .map((e) => e.getAttribute('data-multi-id') + '→' + e.tagName +
+          (e.querySelector('input,textarea,select') ? '(容器含input)' : ''));
+      lines.push('data-multi-id 共 ' + mids.length + ': ' + mids.join(' | '));
+      const inputs = [...document.querySelectorAll('input,textarea')]
+        .filter((e) => (e.getAttribute('placeholder') || '').length > 0)
+        .map((e) => e.getAttribute('placeholder') + '→' + e.tagName + (e.id ? '#' + e.id : '') + ' name=' + (e.name || '-'));
+      lines.push('带 placeholder 的输入框 ' + inputs.length + ': ' + inputs.join(' | '));
+      lines.push('最大耐久解析: ' + desc(qDurability()));
+      lines.push('矿物词典解析: ' + desc(qOredict()));
+      lines.forEach((s) => log(s));
+      console.log('[批量新增][字段诊断]\n' + lines.join('\n'));
+    };
     q('#mb-file').addEventListener('change', (e) => {
       const f = e.target.files[0];
       if (!f) return;
@@ -1253,8 +1310,11 @@
         .filter((x) => btnWords.test(x.t));
       lines.push('按钮候选(' + btns.length + '):');
       btns.slice(0, 8).forEach((b) => lines.push('  「' + b.t + '」id=' + (b.id || '-') + ' cls=' + (b.c || '-')));
-      lines.push('矿物词典字段: ' + (qm('oredict') ? '存在' : '未找到'));
-    lines.push('耐久度字段: ' + (qDurability() ? '存在' : '未找到'));
+      const _od = qOredict(), _du = qDurability();
+      const _desc = (e) => e ? (e.tagName + '#' + (e.id || '-') + ' name=' + (e.name || '-') + ' ph=' + (e.getAttribute('placeholder') || '-')) : '未找到';
+      lines.push('矿物词典字段: ' + _desc(_od));
+      lines.push('最大耐久字段: ' + _desc(_du));
+
       ['改动附言', '改动说明'].forEach((kw) => {
         const r = findByLabel(kw);
         lines.push(kw + '定位: ' + (r ? ('命中 ' + (r.el.tagName + '#' + (r.el.id || '-') + '.' + ((r.el.className || '') + '').slice(0, 16)) + ' [' + r.how + ']') : '未命中'));
@@ -1632,28 +1692,50 @@
       return null;
     }
 
+    /** 点撤回确认。返回：'confirmed'（点了确认且弹窗消失）| 'stuck'（弹窗在但没点掉）
+     *  | 'nodialog'（窗口期内压根没出现弹窗——站点常把撤回做成瞬时完成）
+     *  2026-11-17 用户实测：撤回太快，弹窗一闪就没，旧逻辑等不到 → 全部误判失败。 */
     async function clickRetireConfirm(maxMs) {
       const t0 = Date.now();
-      const limit = maxMs || 3000;
+      const limit = maxMs || 1200;
       let lastDiag = '';
+      let sawDialog = false;
       while (Date.now() - t0 < limit) {
         for (const doc of collectDocs()) {
           const btn = findConfirmButton(doc);
           if (btn) {
+            sawDialog = true;
             const ok = fireClick(btn);
             if (ok) {
-              await sleep(200);
+              await sleep(120);
               const still = doc.querySelector('.swal2-container');
-              if (!still) return true;
+              if (!still) return 'confirmed';
             }
           }
           const dlg = [...doc.querySelectorAll('.layui-layer, [class*="dialog"], [class*="confirm"], [class*="modal"]')]
             .find((el) => /撤回确认|确定要撤回/.test(el.innerText || ''));
-          if (dlg) lastDiag = dlg.outerHTML.slice(0, 300);
+          if (dlg) { sawDialog = true; lastDiag = dlg.outerHTML.slice(0, 300); }
         }
-        await sleep(100);
+        await sleep(50);
       }
       if (lastDiag) info('没点到撤回确认按钮，弹窗结构片段：' + lastDiag);
+      return sawDialog ? 'stuck' : 'nodialog';
+    }
+
+    /** 撤回是否真的生效：行里出现「已撤回」或「撤回」动作消失 */
+    async function retireTookEffect(r, waitMs) {
+      const t0 = Date.now();
+      const limit = waitMs || 1200;
+      while (Date.now() - t0 < limit) {
+        const tr = r._tr;
+        if (!tr) return true;
+        const txt = tr.innerText || '';
+        if (/已撤回/.test(txt)) return true;
+        const stillRetire = [...tr.querySelectorAll('a,button,span,div')]
+          .some((x) => (x.innerText || '').trim() === '撤回');
+        if (!stillRetire) return true;
+        await sleep(60);
+      }
       return false;
     }
 
@@ -1661,16 +1743,25 @@
       const sel = selectedRows().filter((r) => r._retire);
       if (!sel.length) return info('没有选中「可撤回」的条目：先点「全选可撤回」，或直接点行勾选');
       info('开始撤回 ' + sel.length + ' 条…');
-      let ok = 0, fail = 0;
+      let ok = 0, instant = 0, fail = 0;
       for (let i = 0; i < sel.length; i += 1) {
         const r = sel[i];
         info('撤回 ' + (i + 1) + '/' + sel.length + '：' + (r.name || r.id));
+        if (!r._retire) { fail += 1; continue; }
         r._retire.click();
-        const confirmed = await clickRetireConfirm(3000);
-        if (confirmed) { ok += 1; } else { fail += 1; info('第 ' + (i + 1) + ' 条没等到确认弹窗，已跳过：' + (r.name || r.id)); }
-        await sleep(450);
+        const state = await clickRetireConfirm(1200);
+        let done = state === 'confirmed';
+        if (!done) {
+          // 弹窗一闪而过（或被站点自动确认）时，用行状态兜底判成功
+          done = await retireTookEffect(r, 1500);
+          if (done && state === 'nodialog') instant += 1;
+        }
+        if (done) ok += 1;
+        else { fail += 1; info('第 ' + (i + 1) + ' 条状态未确认（' + state + '）：' + (r.name || r.id)); }
+        await sleep(150);
       }
-      info('撤回完成：成功 ' + ok + ' 条' + (fail ? ('，失败 ' + fail + ' 条（没等到弹窗）') : '') + '，页面即将刷新');
+      info('撤回完成：成功 ' + ok + ' 条' + (instant ? ('（其中 ' + instant + ' 条无弹窗、按行状态判定）') : '') +
+        (fail ? ('，失败 ' + fail + ' 条') : '') + '，页面即将刷新');
       setTimeout(() => location.reload(), 1800);
     });
 

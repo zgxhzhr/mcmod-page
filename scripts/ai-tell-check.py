@@ -182,6 +182,8 @@ def check(raw: str, page_type: str = "page") -> dict:
 
     issues: list[dict] = []
 
+    notes: list[str] = []
+
     def add(kind: str, penalty: int, detail: str, samples: list[str] | None = None):
         issues.append({"kind": kind, "penalty": penalty, "detail": detail,
                        "samples": samples or []})
@@ -289,8 +291,10 @@ def check(raw: str, page_type: str = "page") -> dict:
         long_n = sum(1 for L in lens if L > 60)
         ratio = long_n / len(lens)
         if ratio > 0.25:
-            add("超长句过多", 8,
-                f"{long_n}/{len(lens)} 句超过 60 字（{ratio*100:.0f}%）")
+            # 长句不是 AI 味（rules/03 §五之二）：条件链/例外/并列修饰写进一句是正确写法。
+            # 只提示、不扣分——避免为了"像人"把句子硬拆成水文。
+            notes.append(f"{long_n}/{len(lens)} 句超过 60 字（{ratio*100:.0f}%），"
+                         f"长句本身不扣分；仅当拆开不损指代与限定关系时才考虑拆")
 
     # 8. 名词化抽象词
     nom = [(w, plain.count(w)) for w in NOMINALIZATION if plain.count(w)]
@@ -362,6 +366,7 @@ def check(raw: str, page_type: str = "page") -> dict:
         level = "严重，基本是机器腔"
 
     return {
+        "notes": notes,
         "score": score,
         "level": level,
         "chars": total_chars,
@@ -387,6 +392,8 @@ def render(r: dict) -> str:
             lines.append(f"  {i}. [{it['kind']}] -{it['penalty']}分：{it['detail']}")
             for s in it["samples"]:
                 lines.append(f"       · {s}")
+    for n in r.get("notes") or []:
+        lines.append(f"  提示：{n}")
     return "\n".join(lines)
 
 
